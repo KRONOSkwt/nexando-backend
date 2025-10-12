@@ -25,8 +25,7 @@ services:
 
 # Ahora, en una sección separada, definimos las bases de datos.
 databases:
-  # --- Servicio de Base de Datos (PostgreSQL) ---
   - name: nexando-db
     databaseName: nexando_db
     user: nexando_user
-    plan: free # ¡Importante! Usamos el plan gratuito para el MVP.
+    plan: free 
