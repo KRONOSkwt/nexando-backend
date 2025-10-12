@@ -1,32 +1,32 @@
-# render.yaml - Blueprint para desplegar Nexando.ai Backend
+# render.yaml - Blueprint Corregido para Nexando.ai Backend
 
+# Primero definimos los servicios que se ejecutan, como la app web.
 services:
   # --- Servicio Web (Nuestra aplicación Django) ---
   - type: web
     name: nexando-backend
     runtime: python
+    # Asegúrate que el nombre de tu proyecto Django sea 'nexando_backend'
+    # o ajústalo aquí. Este es un cambio del archivo original.
     startCommand: "gunicorn nexando_backend.wsgi:application"
-    # Comandos que se ejecutan durante cada despliegue.
     buildCommand: |
       pip install -r requirements.txt
       python manage.py collectstatic --no-input
       python manage.py migrate
     envVars:
       - key: DATABASE_URL
-        # El valor se toma automáticamente del servicio de base de datos de abajo.
         fromDatabase:
-          name: nexando-db
+          name: nexando-db # Debe coincidir con el 'name' de la base de datos de abajo
           property: connectionString
       - key: SECRET_KEY
-        # Esto genera una clave secreta aleatoria para mayor seguridad.
         generateValue: true
       - key: WEB_CONCURRENCY
         value: 4
 
+# Ahora, en una sección separada, definimos las bases de datos.
+databases:
   # --- Servicio de Base de Datos (PostgreSQL) ---
-  - type: psql
-    name: nexando-db
-    # Nombre de la base de datos y usuario que se crearán.
+  - name: nexando-db
     databaseName: nexando_db
     user: nexando_user
     plan: free # ¡Importante! Usamos el plan gratuito para el MVP.
