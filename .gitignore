@@ -1,0 +1,15 @@
+# .gitignore
+
+# Entorno Virtual
+venv/
+
+# Base de datos local
+db.sqlite3
+*.sqlite3
+
+# Archivos de Python compilados
+__pycache__/
+*.pyc
+
+# Archivos de staticfiles (Render los generará)
+staticfiles/
