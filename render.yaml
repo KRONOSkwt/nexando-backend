@@ -6,26 +6,25 @@ services:
   - type: web
     name: nexando-backend
     runtime: python
-    # Asegúrate que el nombre de tu proyecto Django sea 'nexando_backend'
-    # o ajústalo aquí. Este es un cambio del archivo original.
+    plan: free
     startCommand: "gunicorn nexando_backend.wsgi:application"
     buildCommand: |
       pip install -r requirements.txt
       python manage.py collectstatic --no-input
       python manage.py migrate
+      python manage.py create_initial_superuser
     envVars:
       - key: DATABASE_URL
         fromDatabase:
-          name: nexando-db # Debe coincidir con el 'name' de la base de datos de abajo
+          name: nexando-db
           property: connectionString
       - key: SECRET_KEY
         generateValue: true
       - key: WEB_CONCURRENCY
         value: 4
 
-# Ahora, en una sección separada, definimos las bases de datos.
 databases:
   - name: nexando-db
     databaseName: nexando_db
     user: nexando_user
-    plan: free 
+    plan: free
