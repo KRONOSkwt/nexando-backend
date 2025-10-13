@@ -7,6 +7,7 @@ services:
     name: nexando-backend
     runtime: python
     plan: free
+    plan: free # <--- ¡ESTA ES LA LÍNEA QUE ARREGLA EL COSTO!
     startCommand: "gunicorn nexando_backend.wsgi:application"
     buildCommand: |
       pip install -r requirements.txt
