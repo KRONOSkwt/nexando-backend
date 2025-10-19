@@ -1,9 +1,13 @@
 # api/urls.py
 
 from django.urls import path
-from .views import ProfileDetailView
+# Importa la nueva vista
+from .views import ProfileDetailView, ProfileCreateView
 
 urlpatterns = [
-    # La ruta que espera el frontend: GET /api/v1/profiles/1/
+    # Ruta para CREAR un perfil (POST)
+    path('profiles/', ProfileCreateView.as_view(), name='profile-create'),
+
+    # Ruta para LEER un perfil específico (GET)
     path('profiles/<int:user_id>/', ProfileDetailView.as_view(), name='profile-detail'),
 ]
