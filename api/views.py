@@ -6,18 +6,23 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
 from .models import Profile
+from django.db import IntegrityError
 
 from .serializers import ProfileSerializer, UserCreateSerializer 
 
-class ProfileDetailView(APIView):
+class ProfileCreateView(generics.CreateAPIView):
     """
-    Vista para recuperar un perfil de usuario por su ID.
+    Vista para crear un nuevo Usuario y su Perfil asociado.
+    Solo acepta peticiones POST y maneja errores de duplicados.
     """
-    def get(self, request, user_id, format=None):
-        # Busca el perfil asociado al user_id, si no existe devuelve 404
-        profile = get_object_or_404(Profile, pk=user_id)
-        serializer = ProfileSerializer(profile)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+    serializer_class = UserCreateSerializer
+
+    def create(self, request, *args, **kwargs):
+        try:
+            return super().create(request, *args, **kwargs)
+        except IntegrityError:
+            error_data = {'email': ['A user with that email already exists.']}
+            return Response(error_data, status=status.HTTP_400_BAD_REQUEST)
     
 class ProfileCreateView(generics.CreateAPIView):
     """
