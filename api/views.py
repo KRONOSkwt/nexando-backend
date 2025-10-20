@@ -1,14 +1,24 @@
 # api/views.py
 
-from rest_framework import generics 
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
 from django.shortcuts import get_object_or_404
-from .models import Profile
+from django.contrib.auth.models import User
 from django.db import IntegrityError
 
-from .serializers import ProfileSerializer, UserCreateSerializer 
+from rest_framework import generics, status
+from rest_framework.views import APIView
+from rest_framework.response import Response
+
+from .models import Profile
+from .serializers import ProfileSerializer, UserCreateSerializer
+
+class ProfileDetailView(APIView):
+    """
+    Vista para recuperar un perfil de usuario por su ID.
+    """
+    def get(self, request, user_id, format=None):
+        profile = get_object_or_404(Profile, pk=user_id)
+        serializer = ProfileSerializer(profile)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 class ProfileCreateView(generics.CreateAPIView):
     """
@@ -23,10 +33,3 @@ class ProfileCreateView(generics.CreateAPIView):
         except IntegrityError:
             error_data = {'email': ['A user with that email already exists.']}
             return Response(error_data, status=status.HTTP_400_BAD_REQUEST)
-    
-class ProfileCreateView(generics.CreateAPIView):
-    """
-    Vista para crear un nuevo Usuario y su Perfil asociado.
-    Solo acepta peticiones POST.
-    """
-    serializer_class = UserCreateSerializer
