@@ -1,15 +1,21 @@
 # api/urls.py
 
 from django.urls import path
-# Importa la nueva UserProfileView
-from .views import ProfileDetailView, ProfileCreateView, UserProfileView
+from .views import (
+    ProfileCreateView,
+    UserProfileView,
+    ProfileDetailView,
+    FirstMatchView,
+    ProfilePictureUploadView,
+)
 
 urlpatterns = [
-    # Ruta para CREAR un perfil (POST)
+    # Perfiles
     path('profiles/', ProfileCreateView.as_view(), name='profile-create'),
-    
     path('profiles/me/', UserProfileView.as_view(), name='profile-me'),
-
-    # Ruta para LEER un perfil público específico (GET)
+    path('profiles/me/picture/', ProfilePictureUploadView.as_view(), name='profile-picture-upload'), # NUEVA
     path('profiles/<int:user_id>/', ProfileDetailView.as_view(), name='profile-detail'),
+
+    # Matching
+    path('matches/first/', FirstMatchView.as_view(), name='first-match'), # NUEVA
 ]

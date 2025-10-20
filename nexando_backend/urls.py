@@ -3,7 +3,10 @@
 from django.contrib import admin
 from django.urls import path, include
 
-# --- Importa las vistas de Simple JWT ---
+# --- Importaciones para servir archivos media en desarrollo ---
+from django.conf import settings
+from django.conf.urls.static import static
+
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
@@ -11,13 +14,10 @@ from rest_framework_simplejwt.views import (
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-
-    # Rutas de nuestra API de perfiles
     path('api/v1/', include('api.urls')),
-
-    # 1. Ruta para obtener un par de tokens (login)
     path('api/v1/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
-    
-    # 2. Ruta para refrescar un token de acceso
     path('api/v1/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
 ]
+
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
