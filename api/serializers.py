@@ -4,6 +4,7 @@ from rest_framework import serializers
 from .models import Profile, Interest
 from django.contrib.auth.models import User
 
+# --- El Serializer de Creación se mantiene igual ---
 class UserCreateSerializer(serializers.ModelSerializer):
     first_name = serializers.CharField(write_only=True, required=True)
     password = serializers.CharField(write_only=True, required=True)
@@ -20,10 +21,12 @@ class UserCreateSerializer(serializers.ModelSerializer):
         Profile.objects.create(user=user, first_name=first_name)
         return user
 
+# --- ProfileSerializer ACTUALIZADO con la lógica "Get or Create" ---
 class ProfileSerializer(serializers.ModelSerializer):
+    # Para LEER, seguimos mostrando los nombres de los intereses
     interests = serializers.SlugRelatedField(
         many=True,
-        queryset=Interest.objects.all(),
+        queryset=Interest.objects.all(), # El queryset es necesario para la validación inicial
         slug_field='name'
      )
 
@@ -33,13 +36,16 @@ class ProfileSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         interests_data = validated_data.pop('interests', None)
-        
+
         instance = super().update(instance, validated_data)
 
         if interests_data is not None:
             instance.interests.clear()
+
             for interest_name in interests_data:
-                interest_obj, created = Interest.objects.get_or_create(name=interest_name.strip().title())
+                interest_obj, created = Interest.objects.get_or_create(
+                    name=interest_name.strip().title()
+                )
                 instance.interests.add(interest_obj)
         
         instance.save()
