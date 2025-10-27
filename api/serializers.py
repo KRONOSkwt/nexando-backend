@@ -21,43 +21,41 @@ class UserCreateSerializer(serializers.ModelSerializer):
         Profile.objects.create(user=user, first_name=first_name)
         return user
 
-# --- ProfileSerializer ACTUALIZADO con la lógica "Get or Create" ---
+# --- ProfileSerializer con la Lógica de Validación Corregida ---
 class ProfileSerializer(serializers.ModelSerializer):
-    # Para LEER, seguimos mostrando los nombres de los intereses
+    # 1. Campo para LEER: Muestra los intereses existentes. No se usa para escribir.
     interests = serializers.SlugRelatedField(
         many=True,
-        queryset=Interest.objects.all(), # El queryset es necesario para la validación inicial
+        read_only=True, # ¡CRÍTICO! Este campo ya no aceptará datos de entrada.
         slug_field='name'
      )
 
+    # 2. Campo para ESCRIBIR: Acepta una lista de strings sin validar si existen.
+    #    Este campo solo se usa para la entrada de datos (PATCH/PUT).
+    interest_names = serializers.ListField(
+        child=serializers.CharField(max_length=100),
+        write_only=True, # ¡CRÍTICO! Este campo no se mostrará en las respuestas GET.
+        required=False # Es opcional al actualizar.
+    )
+
     class Meta:
         model = Profile
-        fields = ['first_name', 'profile_picture_url', 'city', 'bio', 'interests']
+        # Añadimos 'interest_names' a la lista de campos.
+        fields = ['first_name', 'profile_picture_url', 'city', 'bio', 'interests', 'interest_names']
 
     def update(self, instance, validated_data):
-        # 1. Extraemos los datos de los intereses antes de la actualización principal.
-        interests_data = validated_data.pop('interests', None)
+        # 3. Lógica "Get or Create": Ahora buscamos 'interest_names' en los datos validados.
+        interests_data = validated_data.pop('interest_names', None)
         
-        # 2. Actualizamos todos los demás campos del perfil (first_name, bio, etc.)
-        #    usando la lógica estándar del serializer.
+        # Actualizamos los otros campos del perfil normalmente.
         instance = super().update(instance, validated_data)
 
-        # 3. Si el frontend nos envió una lista de intereses, la procesamos.
         if interests_data is not None:
-            # Primero, borramos todos los intereses antiguos del usuario.
-            # Esto maneja tanto adiciones como eliminaciones en una sola operación.
             instance.interests.clear()
-            
-            # Ahora, iteramos sobre la lista de strings que nos enviaron.
             for interest_name in interests_data:
-                # LÓGICA CLAVE: "Get or Create"
-                # - Intenta obtener un interés con ese nombre (ignorando mayúsculas/minúsculas y espacios).
-                # - Si no existe, lo CREA.
-                # - Devuelve el objeto de interés (ya sea el encontrado o el recién creado).
                 interest_obj, created = Interest.objects.get_or_create(
-                    name=interest_name.strip().title() # Limpiamos y estandarizamos el nombre
+                    name=interest_name.strip().title()
                 )
-                # Asociamos el interés encontrado/creado al perfil del usuario.
                 instance.interests.add(interest_obj)
         
         instance.save()
