@@ -35,7 +35,7 @@ class RequestMagicLinkView(APIView):
         # 1. Extraemos todos los datos del payload.
         email = request.data.get('email')
         first_name = request.data.get('first_name')
-        interests_data = request.data.get('interests', []) # Default a lista vacía
+        interests_data = request.data.get('interests', []) 
 
         if not email or not first_name:
             return Response({'error': 'Email and first_name are required.'}, status=status.HTTP_400_BAD_REQUEST)
