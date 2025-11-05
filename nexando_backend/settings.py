@@ -51,6 +51,8 @@ INSTALLED_APPS = [
 
     # Nuestras Apps
     'api',
+
+    'sendgrid',
 ]
 
 MIDDLEWARE = [
@@ -159,3 +161,6 @@ SIMPLE_JWT = {
 # --- Configuración de Archivos Media (Subidas de Usuario) ---
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
+DEFAULT_FROM_EMAIL = 'noreply@nexando.ai'
