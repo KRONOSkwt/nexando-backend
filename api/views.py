@@ -26,25 +26,48 @@ from .serializers import ProfileSerializer, UserCreateSerializer, ProfilePicture
 
 class RequestMagicLinkView(APIView):
     """
-    Vista para solicitar un "magic link" de inicio de sesión.
-    Crea un usuario inactivo si no existe.
+    Vista para solicitar un "magic link".
+    Maneja la lógica de "obtener o crear" para el Usuario Y su Perfil.
     """
-    permission_classes = [AllowAny] # Cualquiera puede solicitar un enlace
+    permission_classes = [AllowAny]
 
     def post(self, request, *args, **kwargs):
+        # 1. Extraemos todos los datos del payload.
         email = request.data.get('email')
-        if not email:
-            return Response({'error': 'Email is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        first_name = request.data.get('first_name')
+        interests_data = request.data.get('interests', []) # Default a lista vacía
 
+        if not email or not first_name:
+            return Response({'error': 'Email and first_name are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 2. Lógica "Get or Create" para el Usuario.
         user, created = User.objects.get_or_create(
             username=email,
             defaults={'email': email, 'is_active': False}
         )
 
+        # 3. LÓGICA CORREGIDA: Manejamos el Perfil.
+        if created:
+            # Si el usuario es nuevo, CREAMOS su perfil.
+            profile = Profile.objects.create(user=user, first_name=first_name)
+        else:
+            # Si el usuario ya existía, ACTUALIZAMOS su perfil.
+            profile = user.profile
+            profile.first_name = first_name
+            profile.save()
+
+        # 4. Lógica para manejar los intereses (para ambos casos, creación y actualización).
+        profile.interests.clear()
+        for interest_name in interests_data:
+            interest_obj, _ = Interest.objects.get_or_create(
+                name=interest_name.strip().title()
+            )
+            profile.interests.add(interest_obj)
+
+        # 5. Generamos el token y enviamos el email (esto no cambia).
         token = RefreshToken.for_user(user)
         token.set_exp(lifetime=timedelta(minutes=15))
         
-        # TODO: Mover la URL del frontend a una variable de entorno
         magic_link_url = f"http://localhost:3000/auth/magic-link/verify/?token={str(token.access_token)}"
 
         from sendgrid import SendGridAPIClient
@@ -59,9 +82,8 @@ class RequestMagicLinkView(APIView):
         try:
             sg = SendGridAPIClient(os.environ.get('SENDGRID_API_KEY'))
             sg.send(message)
-            return Response({'detail': 'If an account exists for this email, a magic link has been sent.'}, status=status.HTTP_200_OK)
+            return Response({'detail': 'If an account with this email exists or was created, a magic link has been sent.'}, status=status.HTTP_200_OK)
         except Exception as e:
-            # Log the error in a real application
             return Response({'error': 'Could not send magic link email.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
