@@ -34,7 +34,7 @@ from .serializers import ProfileSerializer, UserCreateSerializer, ProfilePicture
 class RequestMagicLinkView(APIView):
     """
     Vista para solicitar un "magic link".
-    Maneja la lógica de "obtener o crear" para el Usuario Y su Perfil.
+    Utiliza una lógica robusta de "update_or_create" para el Perfil.
     """
     permission_classes = [AllowAny]
 
@@ -46,18 +46,23 @@ class RequestMagicLinkView(APIView):
         if not email or not first_name:
             return Response({'error': 'Email and first_name are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Lógica de "Get or Create" para el Usuario (esto estaba bien).
         user, created = User.objects.get_or_create(
             username=email,
             defaults={'email': email, 'is_active': False}
         )
 
-        if created:
-            profile = Profile.objects.create(user=user, first_name=first_name)
-        else:
-            profile = user.profile
-            profile.first_name = first_name
-            profile.save()
+        # --- LÓGICA CORREGIDA Y ROBUSTA ---
+        # Usamos `update_or_create` para el Perfil. Esto es atómico y seguro.
+        # Intenta encontrar un Profile para el `user`.
+        # Si lo encuentra, actualiza el `first_name`.
+        # Si no lo encuentra, crea un Profile con ese `user` y `first_name`.
+        profile, profile_created = Profile.objects.update_or_create(
+            user=user,
+            defaults={'first_name': first_name}
+        )
 
+        # La lógica para manejar los intereses ahora es segura.
         profile.interests.clear()
         for interest_name in interests_data:
             interest_obj, _ = Interest.objects.get_or_create(
@@ -65,13 +70,13 @@ class RequestMagicLinkView(APIView):
             )
             profile.interests.add(interest_obj)
 
+        # La generación del token y el envío del email no cambian.
         token = RefreshToken.for_user(user)
         token.set_exp(lifetime=timedelta(minutes=15))
         
         # TODO: Mover la URL del frontend a una variable de entorno en settings.py
         magic_link_url = f"http://localhost:3000/auth/magic-link/verify/?token={str(token.access_token)}"
 
-        # Leemos la configuración desde el "Centro de Mando" de Django.
         from_email = settings.DEFAULT_FROM_EMAIL
         api_key = settings.SENDGRID_API_KEY
 
@@ -86,7 +91,6 @@ class RequestMagicLinkView(APIView):
             sg.send(message)
             return Response({'detail': 'If an account with this email exists or was created, a magic link has been sent.'}, status=status.HTTP_200_OK)
         except Exception as e:
-            # En una aplicación real, deberíamos loggear este error.
             return Response({'error': f'Could not send magic link email: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
