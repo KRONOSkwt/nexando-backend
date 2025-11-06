@@ -10,7 +10,7 @@ from django.core.files.base import ContentFile
 from django.shortcuts import get_object_or_404
 from django.db import IntegrityError
 from django.contrib.auth.models import User
-from django.conf import settings # <-- ¡IMPORTANTE! El Centro de Mando de Configuración.
+from django.conf import settings
 
 # Imports de Django Rest Framework
 from rest_framework import generics, status
@@ -25,7 +25,7 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
 # Imports locales
-from .models import Profile
+from .models import Profile, Interest 
 from .serializers import ProfileSerializer, UserCreateSerializer, ProfilePictureSerializer
 
 
@@ -39,6 +39,15 @@ class RequestMagicLinkView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request, *args, **kwargs):
+        api_key = settings.SENDGRID_API_KEY
+        from_email = settings.DEFAULT_FROM_EMAIL
+
+        if not api_key or not from_email:
+            return Response(
+                {'error': 'Server configuration error: Email service is not configured.'}, 
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+
         email = request.data.get('email')
         first_name = request.data.get('first_name')
         interests_data = request.data.get('interests', [])
@@ -46,23 +55,16 @@ class RequestMagicLinkView(APIView):
         if not email or not first_name:
             return Response({'error': 'Email and first_name are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Lógica de "Get or Create" para el Usuario (esto estaba bien).
         user, created = User.objects.get_or_create(
             username=email,
             defaults={'email': email, 'is_active': False}
         )
-
-        # --- LÓGICA CORREGIDA Y ROBUSTA ---
-        # Usamos `update_or_create` para el Perfil. Esto es atómico y seguro.
-        # Intenta encontrar un Profile para el `user`.
-        # Si lo encuentra, actualiza el `first_name`.
-        # Si no lo encuentra, crea un Profile con ese `user` y `first_name`.
+        
         profile, profile_created = Profile.objects.update_or_create(
             user=user,
             defaults={'first_name': first_name}
         )
 
-        # La lógica para manejar los intereses ahora es segura.
         profile.interests.clear()
         for interest_name in interests_data:
             interest_obj, _ = Interest.objects.get_or_create(
@@ -70,15 +72,10 @@ class RequestMagicLinkView(APIView):
             )
             profile.interests.add(interest_obj)
 
-        # La generación del token y el envío del email no cambian.
         token = RefreshToken.for_user(user)
         token.set_exp(lifetime=timedelta(minutes=15))
         
-        # TODO: Mover la URL del frontend a una variable de entorno en settings.py
         magic_link_url = f"http://localhost:3000/auth/magic-link/verify/?token={str(token.access_token)}"
-
-        from_email = settings.DEFAULT_FROM_EMAIL
-        api_key = settings.SENDGRID_API_KEY
 
         message = Mail(
             from_email=from_email,
@@ -88,11 +85,14 @@ class RequestMagicLinkView(APIView):
         )
         try:
             sg = SendGridAPIClient(api_key)
-            sg.send(message)
+            response = sg.send(message)
+            if response.status_code >= 300:
+                return Response({'error': f'Email provider rejected the request: {response.body}'}, status=status.HTTP_502_BAD_GATEWAY)
+            
             return Response({'detail': 'If an account with this email exists or was created, a magic link has been sent.'}, status=status.HTTP_200_OK)
+        
         except Exception as e:
-            return Response({'error': f'Could not send magic link email: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+            return Response({'error': f'An unexpected error occurred while sending the email: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 # --- VISTAS DE PERFIL Y USUARIO ---
 
