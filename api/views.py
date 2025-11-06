@@ -32,31 +32,25 @@ class RequestMagicLinkView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request, *args, **kwargs):
-        # 1. Extraemos todos los datos del payload.
         email = request.data.get('email')
         first_name = request.data.get('first_name')
-        interests_data = request.data.get('interests', []) 
+        interests_data = request.data.get('interests', [])
 
         if not email or not first_name:
             return Response({'error': 'Email and first_name are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 2. Lógica "Get or Create" para el Usuario.
         user, created = User.objects.get_or_create(
             username=email,
             defaults={'email': email, 'is_active': False}
         )
 
-        # 3. LÓGICA CORREGIDA: Manejamos el Perfil.
         if created:
-            # Si el usuario es nuevo, CREAMOS su perfil.
             profile = Profile.objects.create(user=user, first_name=first_name)
         else:
-            # Si el usuario ya existía, ACTUALIZAMOS su perfil.
             profile = user.profile
             profile.first_name = first_name
             profile.save()
 
-        # 4. Lógica para manejar los intereses (para ambos casos, creación y actualización).
         profile.interests.clear()
         for interest_name in interests_data:
             interest_obj, _ = Interest.objects.get_or_create(
@@ -64,7 +58,6 @@ class RequestMagicLinkView(APIView):
             )
             profile.interests.add(interest_obj)
 
-        # 5. Generamos el token y enviamos el email (esto no cambia).
         token = RefreshToken.for_user(user)
         token.set_exp(lifetime=timedelta(minutes=15))
         
@@ -73,8 +66,12 @@ class RequestMagicLinkView(APIView):
         from sendgrid import SendGridAPIClient
         from sendgrid.helpers.mail import Mail
 
+        # --- LÍNEA MODIFICADA ---
+        # Ahora leemos el email de envío desde el entorno para mayor flexibilidad.
+        from_email = os.environ.get('DEFAULT_FROM_EMAIL')
+
         message = Mail(
-            from_email='noreply@nexando.ai',
+            from_email=from_email, # Usamos la variable
             to_emails=email,
             subject='Your Magic Link to Nexando.ai',
             html_content=f'<strong>Welcome to Nexando!</strong><br>Click <a href="{magic_link_url}">here</a> to log in. This link is valid for 15 minutes.'
@@ -84,7 +81,7 @@ class RequestMagicLinkView(APIView):
             sg.send(message)
             return Response({'detail': 'If an account with this email exists or was created, a magic link has been sent.'}, status=status.HTTP_200_OK)
         except Exception as e:
-            return Response({'error': 'Could not send magic link email.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'error': f'Could not send magic link email: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # --- VISTAS DE PERFIL Y USUARIO ---
