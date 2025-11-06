@@ -3,12 +3,14 @@
 import os
 from io import BytesIO
 from PIL import Image
+from datetime import timedelta
+
+# Imports de Django
 from django.core.files.base import ContentFile
 from django.shortcuts import get_object_or_404
 from django.db import IntegrityError
 from django.contrib.auth.models import User
-from django.utils import timezone
-from datetime import timedelta
+from django.conf import settings # <-- ¡IMPORTANTE! El Centro de Mando de Configuración.
 
 # Imports de Django Rest Framework
 from rest_framework import generics, status
@@ -18,9 +20,14 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework_simplejwt.tokens import RefreshToken
 
+# Imports de Terceros
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
+
 # Imports locales
 from .models import Profile
 from .serializers import ProfileSerializer, UserCreateSerializer, ProfilePictureSerializer
+
 
 # --- VISTAS DE AUTENTICACIÓN ---
 
@@ -61,26 +68,25 @@ class RequestMagicLinkView(APIView):
         token = RefreshToken.for_user(user)
         token.set_exp(lifetime=timedelta(minutes=15))
         
+        # TODO: Mover la URL del frontend a una variable de entorno en settings.py
         magic_link_url = f"http://localhost:3000/auth/magic-link/verify/?token={str(token.access_token)}"
 
-        from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import Mail
-
-        # --- LÍNEA MODIFICADA ---
-        # Ahora leemos el email de envío desde el entorno para mayor flexibilidad.
-        from_email = os.environ.get('DEFAULT_FROM_EMAIL')
+        # Leemos la configuración desde el "Centro de Mando" de Django.
+        from_email = settings.DEFAULT_FROM_EMAIL
+        api_key = settings.SENDGRID_API_KEY
 
         message = Mail(
-            from_email=from_email, # Usamos la variable
+            from_email=from_email,
             to_emails=email,
             subject='Your Magic Link to Nexando.ai',
             html_content=f'<strong>Welcome to Nexando!</strong><br>Click <a href="{magic_link_url}">here</a> to log in. This link is valid for 15 minutes.'
         )
         try:
-            sg = SendGridAPIClient(os.environ.get('SENDGRID_API_KEY'))
+            sg = SendGridAPIClient(api_key)
             sg.send(message)
             return Response({'detail': 'If an account with this email exists or was created, a magic link has been sent.'}, status=status.HTTP_200_OK)
         except Exception as e:
+            # En una aplicación real, deberíamos loggear este error.
             return Response({'error': f'Could not send magic link email: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
