@@ -4,6 +4,7 @@ from django.urls import path
 from .views import (
     # Vistas de Auth
     RequestMagicLinkView,
+    VerifyMagicLinkView,
     
     # Vistas de Perfil
     ProfileCreateView,
@@ -18,6 +19,7 @@ from .views import (
 urlpatterns = [
     # --- Auth ---
     path('auth/magic-link/', RequestMagicLinkView.as_view(), name='auth-magic-link-request'),
+    path('auth/magic-link/verify/', VerifyMagicLinkView.as_view(), name='auth-magic-link-verify'),
     
     # --- Profiles ---
     path('profiles/', ProfileCreateView.as_view(), name='profile-create'), # Legacy with password
