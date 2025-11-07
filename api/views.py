@@ -29,27 +29,38 @@ from sendgrid.helpers.mail import Mail
 from .models import Profile, Interest 
 from .serializers import ProfileSerializer, UserCreateSerializer, ProfilePictureSerializer
 
-# --- FUNCIÓN AUXILIAR PARA ENVIAR MAGIC LINKS ---
+# --- FUNCIÓN AUXILIAR BLINDADA PARA ENVIAR MAGIC LINKS ---
 def send_magic_link_email(user):
+    """
+    Genera un token y envía el email.
+    Lanza una excepción si la configuración o el envío fallan.
+    """
+    api_key = settings.SENDGRID_API_KEY
+    from_email = settings.DEFAULT_FROM_EMAIL
+
+    if not api_key or not from_email:
+        raise ValueError("Server configuration error: Email service is not configured.")
+
     token = RefreshToken.for_user(user)
     token.set_exp(lifetime=timedelta(minutes=15))
-    magic_link_url = f"http://localhost:3000/auth/magic-link/verify/?token={str(token.access_token)}" # El frontend recibe esto
-    from_email = settings.DEFAULT_FROM_EMAIL
-    api_key = settings.SENDGRID_API_KEY
-    if not api_key or not from_email:
-        raise ValueError("Email service is not configured on the server.")
+    magic_link_url = f"http://localhost:3000/auth/magic-link/verify/?token={str(token.access_token)}"
+    
     message = Mail(
         from_email=from_email,
         to_emails=user.email,
         subject='Your Magic Link to Nexando.ai',
         html_content=f'<strong>Welcome to Nexando!</strong><br>Click <a href="{magic_link_url}">here</a> to continue. This link is valid for 15 minutes.'
     )
+    
     sg = SendGridAPIClient(api_key)
     response = sg.send(message)
-    if response.status_code >= 300:
-        raise Exception(f"Email provider rejected the request: {response.body}")
 
-# --- VISTAS DE AUTENTICACIÓN HÍBRIDA ---
+    # LÓGICA BLINDADA: Verificamos el código de estado de la respuesta de SendGrid.
+    # 202 (Accepted) es el código de éxito para el envío de emails.
+    if response.status_code != 202:
+        raise Exception(f"Email provider rejected the request with status {response.status_code}: {response.body}")
+
+# --- VISTAS DE AUTENTICACIÓN CON MANEJO DE ERRORES ---
 
 class RegisterView(APIView):
     permission_classes = [AllowAny]
@@ -59,22 +70,30 @@ class RegisterView(APIView):
         interests_data = request.data.get('interests', [])
         if not email or not first_name: return Response({'error': 'Email and first_name are required.'}, status=status.HTTP_400_BAD_REQUEST)
         if User.objects.filter(username=email).exists(): return Response({'error': 'This email is already registered. Please log in instead.'}, status=status.HTTP_400_BAD_REQUEST)
+        
         try:
             user = User.objects.create_user(username=email, email=email, is_active=False)
             profile = Profile.objects.create(user=user, first_name=first_name)
             for interest_name in interests_data:
                 interest_obj, _ = Interest.objects.get_or_create(name=interest_name.strip().title())
                 profile.interests.add(interest_obj)
+            
+            # Llamamos a nuestra función blindada
             send_magic_link_email(user)
+            
             return Response({'detail': 'Registration successful. A verification link has been sent to your email.'}, status=status.HTTP_201_CREATED)
+        
         except Exception as e:
-            return Response({'error': f'An unexpected error occurred: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            # Si send_magic_link_email lanza una excepción, la atrapamos aquí.
+            # 502 Bad Gateway es el código correcto para un error de un servicio externo.
+            return Response({'error': f'An error occurred: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
     def post(self, request, *args, **kwargs):
         email = request.data.get('email')
         if not email: return Response({'error': 'Email is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        
         try:
             user = User.objects.get(username=email)
             send_magic_link_email(user)
@@ -82,44 +101,26 @@ class LoginView(APIView):
         except User.DoesNotExist:
             return Response({'detail': 'If an account with that email exists, a login link has been sent.'}, status=status.HTTP_200_OK)
         except Exception as e:
-            return Response({'error': f'An unexpected error occurred: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'error': f'An error occurred: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
 
-# --- NUEVA VISTA DEFINITIVA ---
 class SetPasswordView(APIView):
-    """
-    Verifica un token de un solo uso, establece la contraseña del usuario,
-    lo activa y devuelve los tokens de sesión.
-    """
     permission_classes = [AllowAny]
-
     def post(self, request, *args, **kwargs):
         token_str = request.data.get('token')
         password = request.data.get('password')
-
-        if not token_str or not password:
-            return Response({'error': 'Token and password are required.'}, status=status.HTTP_400_BAD_REQUEST)
-
+        if not token_str or not password: return Response({'error': 'Token and password are required.'}, status=status.HTTP_400_BAD_REQUEST)
         try:
             token = AccessToken(token_str)
             token.verify()
             user_id = token['user_id']
             user = User.objects.get(id=user_id)
-            
-            # Establece la contraseña y activa al usuario
             user.set_password(password)
             user.is_active = True
             user.save()
-
-            # Genera y devuelve los tokens de sesión
             session_tokens = RefreshToken.for_user(user)
-            return Response({
-                'refresh': str(session_tokens),
-                'access': str(session_tokens.access_token),
-            }, status=status.HTTP_200_OK)
-
+            return Response({'refresh': str(session_tokens), 'access': str(session_tokens.access_token)}, status=status.HTTP_200_OK)
         except (TokenError, InvalidToken, User.DoesNotExist):
             return Response({'error': 'Invalid or expired token.'}, status=status.HTTP_401_UNAUTHORIZED)
-
 
 # --- OTRAS VISTAS (sin cambios) ---
 class UserProfileView(APIView):
