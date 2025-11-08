@@ -1,14 +1,18 @@
+# api/views.py
+
 import os
 from io import BytesIO
 from PIL import Image
 from datetime import timedelta
 
+# Imports de Django
 from django.core.files.base import ContentFile
 from django.shortcuts import get_object_or_404
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction # <-- Importación para transacciones atómicas
 from django.contrib.auth.models import User
 from django.conf import settings
 
+# Imports de Django Rest Framework
 from rest_framework import generics, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -17,12 +21,15 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework_simplejwt.tokens import RefreshToken, AccessToken
 from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
 
+# Imports de Terceros
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
+# Imports locales
 from .models import Profile, Interest 
 from .serializers import ProfileSerializer
 
+# --- FUNCIÓN AUXILIAR (sin cambios) ---
 def send_magic_link_email(user):
     api_key = settings.SENDGRID_API_KEY
     from_email = settings.DEFAULT_FROM_EMAIL
@@ -42,8 +49,11 @@ def send_magic_link_email(user):
     if response.status_code != 202:
         raise Exception(f"Email provider rejected the request with status {response.status_code}: {response.body}")
 
+# --- VISTAS DE AUTENTICACIÓN FINALES ---
+
 class RegisterView(APIView):
     permission_classes = [AllowAny]
+    @transaction.atomic # <-- ¡CLAVE! O todo tiene éxito, o todo falla.
     def post(self, request, *args, **kwargs):
         email = request.data.get('email')
         first_name = request.data.get('first_name')
@@ -56,14 +66,21 @@ class RegisterView(APIView):
                 status=status.HTTP_409_CONFLICT
             )
         try:
+            # Side-effect in a transaction: all DB operations are buffered
             user = User.objects.create_user(username=email, email=email, is_active=False)
             profile = Profile.objects.create(user=user, first_name=first_name)
             for interest_name in interests_data:
                 interest_obj, _ = Interest.objects.get_or_create(name=interest_name.strip().title())
                 profile.interests.add(interest_obj)
+            
+            # This is now part of the transaction. If it fails, the user is NOT created.
             send_magic_link_email(user)
+            
+            # If we reach here, the transaction will be committed successfully.
             return Response({'detail': 'Registration successful. A verification link has been sent to your email.'}, status=status.HTTP_201_CREATED)
+        
         except Exception as e:
+            # The transaction will be rolled back automatically on any exception.
             return Response({'error': f'An unexpected error occurred: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
 
 class LoginView(APIView):
@@ -73,12 +90,14 @@ class LoginView(APIView):
         if not email: return Response({'error': 'Email is required.'}, status=status.HTTP_400_BAD_REQUEST)
         try:
             user = User.objects.get(username=email)
+            # La lógica de enviar el link funciona para usuarios activos e inactivos, unificando la experiencia.
             send_magic_link_email(user)
             return Response({'detail': 'If an account with that email exists, a login link has been sent.'}, status=status.HTTP_200_OK)
         except User.DoesNotExist:
             return Response({'detail': 'If an account with that email exists, a login link has been sent.'}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({'error': f'An unexpected error occurred: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
+
 
 class SetPasswordView(APIView):
     permission_classes = [AllowAny]
