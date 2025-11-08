@@ -21,95 +21,64 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
 from .models import Profile, Interest 
-from .serializers import ProfileSerializer, UserCreateSerializer, ProfilePictureSerializer
+from .serializers import ProfileSerializer
 
 def send_magic_link_email(user):
-    print("--- [DEBUG] Entrando en send_magic_link_email ---")
     api_key = settings.SENDGRID_API_KEY
     from_email = settings.DEFAULT_FROM_EMAIL
-
     if not api_key or not from_email:
-        print(f"--- [ERROR] Falla de configuración: api_key o from_email faltan. API Key Presente: {bool(api_key)}, From Email: {from_email}")
         raise ValueError("Server configuration error: Email service is not configured.")
-
     token = RefreshToken.for_user(user)
     token.set_exp(lifetime=timedelta(minutes=15))
     magic_link_url = f"http://localhost:3000/auth/magic-link/verify/?token={str(token.access_token)}"
-    
     message = Mail(
         from_email=from_email,
         to_emails=user.email,
         subject='Your Magic Link to Nexando.ai',
         html_content=f'<strong>Welcome to Nexando!</strong><br>Click <a href="{magic_link_url}">here</a> to continue. This link is valid for 15 minutes.'
     )
-    
-    try:
-        print(f"--- [DEBUG] Intentando enviar email a {user.email} desde {from_email} ---")
-        sg = SendGridAPIClient(api_key)
-        response = sg.send(message)
-        print(f"--- [DEBUG] SendGrid respondió con status code: {response.status_code} ---")
-
-        if response.status_code != 202:
-            print(f"--- [ERROR] SendGrid rechazó la petición. Body: {response.body}")
-            raise Exception(f"Email provider rejected the request with status {response.status_code}")
-        
-        print("--- [DEBUG] Email enviado exitosamente a través de SendGrid ---")
-
-    except Exception as e:
-        print(f"--- [CRITICAL ERROR] Ocurrió una excepción DENTRO de la llamada a SendGrid: {str(e)} ---")
-        raise
+    sg = SendGridAPIClient(api_key)
+    response = sg.send(message)
+    if response.status_code != 202:
+        raise Exception(f"Email provider rejected the request with status {response.status_code}: {response.body}")
 
 class RegisterView(APIView):
     permission_classes = [AllowAny]
     def post(self, request, *args, **kwargs):
-        print("\n--- [DEBUG] Petición recibida en RegisterView ---")
         email = request.data.get('email')
         first_name = request.data.get('first_name')
         interests_data = request.data.get('interests', [])
-        if not email or not first_name: return Response({'error': 'Email and first_name are required.'}, status=status.HTTP_400_BAD_REQUEST)
-        if User.objects.filter(username=email).exists(): return Response({'error': 'This email is already registered. Please log in instead.'}, status=status.HTTP_400_BAD_REQUEST)
-        
+        if not email or not first_name:
+            return Response({'error': 'Email and first_name are required.'}, status=status.HTTP_400_BAD_REQUEST)
+        if User.objects.filter(username=email).exists():
+            return Response(
+                {'error': 'This email is already registered. Please proceed to login.'}, 
+                status=status.HTTP_409_CONFLICT
+            )
         try:
             user = User.objects.create_user(username=email, email=email, is_active=False)
             profile = Profile.objects.create(user=user, first_name=first_name)
             for interest_name in interests_data:
                 interest_obj, _ = Interest.objects.get_or_create(name=interest_name.strip().title())
                 profile.interests.add(interest_obj)
-            
-            print("--- [DEBUG] Usuario y perfil creados/actualizados. Procediendo a enviar email. ---")
             send_magic_link_email(user)
-            
-            print("--- [DEBUG] Email enviado (supuestamente). Devolviendo 201. ---")
             return Response({'detail': 'Registration successful. A verification link has been sent to your email.'}, status=status.HTTP_201_CREATED)
-        
         except Exception as e:
-            print(f"--- [CRITICAL ERROR] Excepción atrapada en RegisterView: {str(e)} ---")
-            return Response({'error': f'An error occurred: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
+            return Response({'error': f'An unexpected error occurred: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
     def post(self, request, *args, **kwargs):
-        print("\n--- [DEBUG] Petición recibida en LoginView ---")
         email = request.data.get('email')
         if not email: return Response({'error': 'Email is required.'}, status=status.HTTP_400_BAD_REQUEST)
-        
         try:
-            print(f"--- [DEBUG] Buscando usuario con email: {email} ---")
             user = User.objects.get(username=email)
-            
-            print(f"--- [DEBUG] Usuario encontrado. Procediendo a enviar email. ---")
             send_magic_link_email(user)
-
-            print("--- [DEBUG] Email enviado (supuestamente). Devolviendo 200. ---")
             return Response({'detail': 'If an account with that email exists, a login link has been sent.'}, status=status.HTTP_200_OK)
-        
         except User.DoesNotExist:
-            print("--- [DEBUG] Usuario no encontrado. Devolviendo 200 por seguridad. ---")
             return Response({'detail': 'If an account with that email exists, a login link has been sent.'}, status=status.HTTP_200_OK)
-        
         except Exception as e:
-            print(f"--- [CRITICAL ERROR] Excepción atrapada en LoginView: {str(e)} ---")
-            return Response({'error': f'An error occurred: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
+            return Response({'error': f'An unexpected error occurred: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
 
 class SetPasswordView(APIView):
     permission_classes = [AllowAny]
