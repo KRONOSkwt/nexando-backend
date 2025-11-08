@@ -1,18 +1,14 @@
-# api/views.py
-
 import os
 from io import BytesIO
 from PIL import Image
 from datetime import timedelta
 
-# Imports de Django
 from django.core.files.base import ContentFile
 from django.shortcuts import get_object_or_404
 from django.db import IntegrityError
 from django.contrib.auth.models import User
 from django.conf import settings
 
-# Imports de Django Rest Framework
 from rest_framework import generics, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -21,24 +17,19 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework_simplejwt.tokens import RefreshToken, AccessToken
 from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
 
-# Imports de Terceros
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
-# Imports locales
 from .models import Profile, Interest 
 from .serializers import ProfileSerializer, UserCreateSerializer, ProfilePictureSerializer
 
-# --- FUNCIÓN AUXILIAR BLINDADA PARA ENVIAR MAGIC LINKS ---
 def send_magic_link_email(user):
-    """
-    Genera un token y envía el email.
-    Lanza una excepción si la configuración o el envío fallan.
-    """
+    print("--- [DEBUG] Entrando en send_magic_link_email ---")
     api_key = settings.SENDGRID_API_KEY
     from_email = settings.DEFAULT_FROM_EMAIL
 
     if not api_key or not from_email:
+        print(f"--- [ERROR] Falla de configuración: api_key o from_email faltan. API Key Presente: {bool(api_key)}, From Email: {from_email}")
         raise ValueError("Server configuration error: Email service is not configured.")
 
     token = RefreshToken.for_user(user)
@@ -52,19 +43,26 @@ def send_magic_link_email(user):
         html_content=f'<strong>Welcome to Nexando!</strong><br>Click <a href="{magic_link_url}">here</a> to continue. This link is valid for 15 minutes.'
     )
     
-    sg = SendGridAPIClient(api_key)
-    response = sg.send(message)
+    try:
+        print(f"--- [DEBUG] Intentando enviar email a {user.email} desde {from_email} ---")
+        sg = SendGridAPIClient(api_key)
+        response = sg.send(message)
+        print(f"--- [DEBUG] SendGrid respondió con status code: {response.status_code} ---")
 
-    # LÓGICA BLINDADA: Verificamos el código de estado de la respuesta de SendGrid.
-    # 202 (Accepted) es el código de éxito para el envío de emails.
-    if response.status_code != 202:
-        raise Exception(f"Email provider rejected the request with status {response.status_code}: {response.body}")
+        if response.status_code != 202:
+            print(f"--- [ERROR] SendGrid rechazó la petición. Body: {response.body}")
+            raise Exception(f"Email provider rejected the request with status {response.status_code}")
+        
+        print("--- [DEBUG] Email enviado exitosamente a través de SendGrid ---")
 
-# --- VISTAS DE AUTENTICACIÓN CON MANEJO DE ERRORES ---
+    except Exception as e:
+        print(f"--- [CRITICAL ERROR] Ocurrió una excepción DENTRO de la llamada a SendGrid: {str(e)} ---")
+        raise
 
 class RegisterView(APIView):
     permission_classes = [AllowAny]
     def post(self, request, *args, **kwargs):
+        print("\n--- [DEBUG] Petición recibida en RegisterView ---")
         email = request.data.get('email')
         first_name = request.data.get('first_name')
         interests_data = request.data.get('interests', [])
@@ -78,29 +76,39 @@ class RegisterView(APIView):
                 interest_obj, _ = Interest.objects.get_or_create(name=interest_name.strip().title())
                 profile.interests.add(interest_obj)
             
-            # Llamamos a nuestra función blindada
+            print("--- [DEBUG] Usuario y perfil creados/actualizados. Procediendo a enviar email. ---")
             send_magic_link_email(user)
             
+            print("--- [DEBUG] Email enviado (supuestamente). Devolviendo 201. ---")
             return Response({'detail': 'Registration successful. A verification link has been sent to your email.'}, status=status.HTTP_201_CREATED)
         
         except Exception as e:
-            # Si send_magic_link_email lanza una excepción, la atrapamos aquí.
-            # 502 Bad Gateway es el código correcto para un error de un servicio externo.
+            print(f"--- [CRITICAL ERROR] Excepción atrapada en RegisterView: {str(e)} ---")
             return Response({'error': f'An error occurred: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
     def post(self, request, *args, **kwargs):
+        print("\n--- [DEBUG] Petición recibida en LoginView ---")
         email = request.data.get('email')
         if not email: return Response({'error': 'Email is required.'}, status=status.HTTP_400_BAD_REQUEST)
         
         try:
+            print(f"--- [DEBUG] Buscando usuario con email: {email} ---")
             user = User.objects.get(username=email)
+            
+            print(f"--- [DEBUG] Usuario encontrado. Procediendo a enviar email. ---")
             send_magic_link_email(user)
+
+            print("--- [DEBUG] Email enviado (supuestamente). Devolviendo 200. ---")
             return Response({'detail': 'If an account with that email exists, a login link has been sent.'}, status=status.HTTP_200_OK)
+        
         except User.DoesNotExist:
+            print("--- [DEBUG] Usuario no encontrado. Devolviendo 200 por seguridad. ---")
             return Response({'detail': 'If an account with that email exists, a login link has been sent.'}, status=status.HTTP_200_OK)
+        
         except Exception as e:
+            print(f"--- [CRITICAL ERROR] Excepción atrapada en LoginView: {str(e)} ---")
             return Response({'error': f'An error occurred: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
 
 class SetPasswordView(APIView):
@@ -122,7 +130,6 @@ class SetPasswordView(APIView):
         except (TokenError, InvalidToken, User.DoesNotExist):
             return Response({'error': 'Invalid or expired token.'}, status=status.HTTP_401_UNAUTHORIZED)
 
-# --- OTRAS VISTAS (sin cambios) ---
 class UserProfileView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request, format=None):
