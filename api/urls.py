@@ -1,5 +1,6 @@
 from django.urls import path
 from .views import (
+    ValidateEmailView,
     RegisterView,
     LoginView,
     SetPasswordView,
@@ -10,6 +11,7 @@ from .views import (
 )
 
 urlpatterns = [
+    path('auth/validate-email/', ValidateEmailView.as_view(), name='auth-validate-email'),
     path('auth/register/', RegisterView.as_view(), name='auth-register'),
     path('auth/login/', LoginView.as_view(), name='auth-login'),
     path('auth/magic-link/set-password/', SetPasswordView.as_view(), name='auth-set-password'),

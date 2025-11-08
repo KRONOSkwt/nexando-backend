@@ -51,36 +51,51 @@ def send_magic_link_email(user):
 
 # --- VISTAS DE AUTENTICACIÓN FINALES ---
 
-class RegisterView(APIView):
+class ValidateEmailView(APIView):
+    """
+    Endpoint para validación proactiva de email.
+    """
     permission_classes = [AllowAny]
-    @transaction.atomic # <-- ¡CLAVE! O todo tiene éxito, o todo falla.
     def post(self, request, *args, **kwargs):
         email = request.data.get('email')
-        first_name = request.data.get('first_name')
-        interests_data = request.data.get('interests', [])
-        if not email or not first_name:
-            return Response({'error': 'Email and first_name are required.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not email:
+            return Response({'error': 'Email is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        
         if User.objects.filter(username=email).exists():
             return Response(
                 {'error': 'This email is already registered. Please proceed to login.'}, 
                 status=status.HTTP_409_CONFLICT
             )
+        
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+class RegisterView(APIView):
+    """
+    Endpoint para REGISTRO final. Asume que el email ya fue validado.
+    """
+    permission_classes = [AllowAny]
+    @transaction.atomic
+    def post(self, request, *args, **kwargs):
+        email = request.data.get('email')
+        first_name = request.data.get('first_name')
+        interests_data = request.data.get('interests', [])
+        
+        if not email or not first_name:
+            return Response({'error': 'Email and first_name are required.'}, status=status.HTTP_400_BAD_REQUEST)
+        
         try:
-            # Side-effect in a transaction: all DB operations are buffered
             user = User.objects.create_user(username=email, email=email, is_active=False)
             profile = Profile.objects.create(user=user, first_name=first_name)
             for interest_name in interests_data:
                 interest_obj, _ = Interest.objects.get_or_create(name=interest_name.strip().title())
                 profile.interests.add(interest_obj)
             
-            # This is now part of the transaction. If it fails, the user is NOT created.
             send_magic_link_email(user)
-            
-            # If we reach here, the transaction will be committed successfully.
             return Response({'detail': 'Registration successful. A verification link has been sent to your email.'}, status=status.HTTP_201_CREATED)
         
+        except IntegrityError:
+            return Response({'error': 'This email was just registered.'}, status=status.HTTP_409_CONFLICT)
         except Exception as e:
-            # The transaction will be rolled back automatically on any exception.
             return Response({'error': f'An unexpected error occurred: {str(e)}'}, status=status.HTTP_502_BAD_GATEWAY)
 
 class LoginView(APIView):
