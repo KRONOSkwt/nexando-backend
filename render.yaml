@@ -1,19 +1,16 @@
-# render.yaml - Blueprint Corregido para Nexando.ai Backend
+# render.yaml - Arquitectura Final para Nexando.ai v1.0
 
-# Primero definimos los servicios que se ejecutan, como la app web.
 services:
-  # --- Servicio Web (Nuestra aplicación Django) ---
   - type: web
     name: nexando-backend
     runtime: python
     plan: free
-    plan: free # <--- ¡ESTA ES LA LÍNEA QUE ARREGLA EL COSTO!
-    startCommand: "gunicorn nexando_backend.wsgi:application"
     buildCommand: |
       pip install -r requirements.txt
       python manage.py collectstatic --no-input
       python manage.py migrate
       python manage.py create_initial_superuser
+    startCommand: "gunicorn nexando_backend.wsgi:application"
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -23,6 +20,8 @@ services:
         generateValue: true
       - key: WEB_CONCURRENCY
         value: 4
+      - key: PYTHON_VERSION
+        value: 3.11.9 
 
 databases:
   - name: nexando-db

@@ -1,21 +1,22 @@
-# api/urls.py
-
 from django.urls import path
 from .views import (
-    ProfileCreateView,
+    ValidateEmailView,
+    RegisterView,
+    LoginView,
+    SetPasswordView,
     UserProfileView,
+    ProfilePictureUploadView,
     ProfileDetailView,
     FirstMatchView,
-    ProfilePictureUploadView,
 )
 
 urlpatterns = [
-    # Perfiles
-    path('profiles/', ProfileCreateView.as_view(), name='profile-create'),
+    path('auth/validate-email/', ValidateEmailView.as_view(), name='auth-validate-email'),
+    path('auth/register/', RegisterView.as_view(), name='auth-register'),
+    path('auth/login/', LoginView.as_view(), name='auth-login'),
+    path('auth/magic-link/set-password/', SetPasswordView.as_view(), name='auth-set-password'),
     path('profiles/me/', UserProfileView.as_view(), name='profile-me'),
-    path('profiles/me/picture/', ProfilePictureUploadView.as_view(), name='profile-picture-upload'), # NUEVA
+    path('profiles/me/picture/', ProfilePictureUploadView.as_view(), name='profile-picture-upload'),
     path('profiles/<int:user_id>/', ProfileDetailView.as_view(), name='profile-detail'),
-
-    # Matching
-    path('matches/first/', FirstMatchView.as_view(), name='first-match'), # NUEVA
+    path('matches/first/', FirstMatchView.as_view(), name='first-match'),
 ]
