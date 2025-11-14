@@ -1,5 +1,3 @@
-# api/models.py
-
 from django.db import models
 from django.contrib.auth.models import User
 
@@ -15,7 +13,26 @@ class Profile(models.Model):
     profile_picture_url = models.URLField(max_length=255, blank=True)
     city = models.CharField(max_length=100, blank=True)
     bio = models.TextField(blank=True)
-    interests = models.ManyToManyField(Interest, blank=True)
+    interests = models.ManyToManyField(
+        Interest,
+        through='UserInterest',
+        related_name='profiles'
+    )
 
     def __str__(self):
         return self.user.username
+
+class UserInterest(models.Model):
+    """
+    Tabla intermedia que conecta un Perfil con un Interés,
+    añadiendo la ponderación (si es primario o no).
+    """
+    profile = models.ForeignKey(Profile, on_delete=models.CASCADE)
+    interest = models.ForeignKey(Interest, on_delete=models.CASCADE)
+    is_primary = models.BooleanField(default=False)
+
+    class Meta:
+        unique_together = ('profile', 'interest')
+
+    def __str__(self):
+        return f"{self.profile.user.username} - {self.interest.name} ({'Primary' if self.is_primary else 'Secondary'})"
