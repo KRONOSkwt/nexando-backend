@@ -8,9 +8,10 @@ from datetime import timedelta
 # Imports de Django
 from django.core.files.base import ContentFile
 from django.shortcuts import get_object_or_404
-from django.db import IntegrityError, transaction # <-- Importación para transacciones atómicas
+from django.db import IntegrityError, transaction
 from django.contrib.auth.models import User
 from django.conf import settings
+from django.db.models import Count, Q, F
 
 # Imports de Django Rest Framework
 from rest_framework import generics, status
@@ -183,3 +184,48 @@ class FirstMatchView(APIView):
             return Response(serializer.data)
         else:
             return Response({'detail': 'No matches found at this time.'}, status=status.HTTP_404_NOT_FOUND)
+        
+class RecommendationView(generics.ListAPIView):
+    """
+    Devuelve una lista paginada de perfiles recomendados,
+    ordenados por un algoritmo de puntuación basado en intereses comunes.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = ProfileSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        
+        # TODO: Optimizar para no hacer estas consultas en cada petición. Cachear.
+        primary_interest_ids = user.profile.userinterest_set.filter(
+            is_primary=True
+        ).values_list('interest_id', flat=True)
+        
+        secondary_interest_ids = user.profile.userinterest_set.filter(
+            is_primary=False
+        ).values_list('interest_id', flat=True)
+        
+        interacted_user_ids = MatchAction.objects.filter(
+            actor=user
+        ).values_list('target_id', flat=True)
+
+        queryset = Profile.objects.annotate(
+            primary_score=Count(
+                'interests',
+                filter=Q(interests__id__in=primary_interest_ids)
+            ),
+            secondary_score=Count(
+                'interests',
+                filter=Q(interests__id__in=secondary_interest_ids)
+            )
+        ).annotate(
+            total_score=F('primary_score') * 2 + F('secondary_score')
+        )
+
+        return queryset.exclude(
+            user=user
+        ).exclude(
+            user_id__in=interacted_user_ids
+        ).filter(
+            total_score__gt=0
+        ).order_by('-total_score', '?')

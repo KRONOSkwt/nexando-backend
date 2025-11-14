@@ -8,6 +8,7 @@ from .views import (
     ProfilePictureUploadView,
     ProfileDetailView,
     FirstMatchView,
+    RecommendationView,
 )
 
 urlpatterns = [
@@ -18,5 +19,6 @@ urlpatterns = [
     path('profiles/me/', UserProfileView.as_view(), name='profile-me'),
     path('profiles/me/picture/', ProfilePictureUploadView.as_view(), name='profile-picture-upload'),
     path('profiles/<int:user_id>/', ProfileDetailView.as_view(), name='profile-detail'),
+    path('matches/recommendations/', RecommendationView.as_view(), name='match-recommendations'),
     path('matches/first/', FirstMatchView.as_view(), name='first-match'),
 ]
