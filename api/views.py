@@ -12,6 +12,7 @@ from django.db import IntegrityError, transaction
 from django.contrib.auth.models import User
 from django.conf import settings
 from django.db.models import Count, Q, F
+from django.core.cache import cache
 
 # Imports de Django Rest Framework
 from rest_framework import generics, status
@@ -135,17 +136,27 @@ class SetPasswordView(APIView):
             return Response({'error': 'Invalid or expired token.'}, status=status.HTTP_401_UNAUTHORIZED)
 
 class UserProfileView(APIView):
+    """
+    Permite obtener y actualizar el perfil del usuario autenticado,
+    invalidando la caché de recomendaciones al actualizar.
+    """
     permission_classes = [IsAuthenticated]
+
     def get(self, request, format=None):
         serializer = ProfileSerializer(request.user.profile)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.data)
+
     def patch(self, request, format=None):
         profile = request.user.profile
         serializer = ProfileSerializer(profile, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
+            cache.delete_many([
+                f"user_{request.user.id}_recommendations_primary",
+                f"user_{request.user.id}_recommendations_secondary"
+            ])
             return Response(serializer.data)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response(serializer.errors, status=400)
 
 class ProfilePictureUploadView(APIView):
     permission_classes = [IsAuthenticated]
@@ -188,40 +199,34 @@ class FirstMatchView(APIView):
 class RecommendationView(generics.ListAPIView):
     """
     Devuelve una lista paginada de perfiles recomendados,
-    ordenados por un algoritmo de puntuación basado en intereses comunes.
+    optimizada con un sistema de caché.
     """
     permission_classes = [IsAuthenticated]
     serializer_class = ProfileSerializer
 
     def get_queryset(self):
         user = self.request.user
+        cache_key_prefix = f"user_{user.id}_recommendations"
         
-        # TODO: Optimizar para no hacer estas consultas en cada petición. Cachear.
-        primary_interest_ids = user.profile.userinterest_set.filter(
-            is_primary=True
-        ).values_list('interest_id', flat=True)
-        
-        secondary_interest_ids = user.profile.userinterest_set.filter(
-            is_primary=False
-        ).values_list('interest_id', flat=True)
-        
-        interacted_user_ids = MatchAction.objects.filter(
-            actor=user
-        ).values_list('target_id', flat=True)
+        primary_interest_ids = cache.get(f"{cache_key_prefix}_primary")
+        secondary_interest_ids = cache.get(f"{cache_key_prefix}_secondary")
+        interacted_user_ids = cache.get(f"{cache_key_prefix}_interacted")
+
+        if None in [primary_interest_ids, secondary_interest_ids, interacted_user_ids]:
+            primary_interest_ids = list(user.profile.userinterest_set.filter(is_primary=True).values_list('interest_id', flat=True))
+            secondary_interest_ids = list(user.profile.userinterest_set.filter(is_primary=False).values_list('interest_id', flat=True))
+            interacted_user_ids = list(MatchAction.objects.filter(actor=user).values_list('target_id', flat=True))
+            
+            cache.set(f"{cache_key_prefix}_primary", primary_interest_ids, timeout=300)
+            cache.set(f"{cache_key_prefix}_secondary", secondary_interest_ids, timeout=300)
+            cache.set(f"{cache_key_prefix}_interacted", interacted_user_ids, timeout=300)
 
         queryset = Profile.objects.annotate(
-            primary_score=Count(
-                'interests',
-                filter=Q(interests__id__in=primary_interest_ids)
-            ),
-            secondary_score=Count(
-                'interests',
-                filter=Q(interests__id__in=secondary_interest_ids)
-            )
+            primary_score=Count('interests', filter=Q(interests__id__in=primary_interest_ids)),
+            secondary_score=Count('interests', filter=Q(interests__id__in=secondary_interest_ids))
         ).annotate(
             total_score=F('primary_score') * 2 + F('secondary_score')
         )
-
         return queryset.exclude(
             user=user
         ).exclude(
@@ -232,8 +237,8 @@ class RecommendationView(generics.ListAPIView):
     
 class MatchActionView(APIView):
     """
-    Registra una acción (like/pass) de un usuario hacia otro
-    y detecta si se ha producido un 'match' mutuo.
+    Registra una acción de match, invalida la caché relevante
+    y dispara notificaciones asíncronas simuladas.
     """
     permission_classes = [IsAuthenticated]
 
@@ -244,47 +249,41 @@ class MatchActionView(APIView):
         action = request.data.get('action')
 
         if not target_id or action not in [MatchAction.Action.LIKE, MatchAction.Action.PASS]:
-            return Response(
-                {'error': 'target_id and a valid action (like/pass) are required.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({'error': 'target_id and a valid action (like/pass) are required.'}, status=400)
 
         try:
             target = User.objects.get(id=target_id)
         except User.DoesNotExist:
-            return Response({'error': 'Target user not found.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': 'Target user not found.'}, status=404)
 
         if actor == target:
-            return Response({'error': 'Cannot perform action on oneself.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Cannot perform action on oneself.'}, status=400)
 
         MatchAction.objects.update_or_create(
             actor=actor,
             target=target,
             defaults={'action': action}
         )
+        
+        cache.delete(f"user_{actor.id}_recommendations_interacted")
 
         if action == MatchAction.Action.LIKE:
-            reciprocal_like_exists = MatchAction.objects.filter(
-                actor=target,
-                target=actor,
-                action=MatchAction.Action.LIKE
-            ).exists()
-
-            if reciprocal_like_exists:
+            if MatchAction.objects.filter(actor=target, target=actor, action=MatchAction.Action.LIKE).exists():
                 user1, user2 = sorted([actor.id, target.id])
-                user1_obj = User.objects.get(id=user1)
-                user2_obj = User.objects.get(id=user2)
-
                 connection, created = Connection.objects.get_or_create(
-                    user1=user1_obj,
-                    user2=user2_obj
+                    user1_id=user1,
+                    user2_id=user2
                 )
-
-                # TODO: Disparar notificaciones asíncronas a ambos usuarios.
                 
-                return Response({
-                    'status': 'match',
-                    'connection_id': connection.id
-                }, status=status.HTTP_201_CREATED)
+                cache.delete(f"user_{target.id}_recommendations_interacted")
+                send_match_notification_async(actor, target)
+                
+                return Response({'status': 'match', 'connection_id': connection.id}, status=201)
 
-        return Response({'status': action}, status=status.HTTP_200_OK)
+        return Response({'status': action}, status=200)
+    
+def send_match_notification_async(user1, user2):
+    """
+    TODO: Reemplazar con una llamada a una tarea de Celery/RQ.
+    """
+    print(f"--- [NOTIFICATION] Disparando notificación de match entre {user1.username} y {user2.username} ---")
