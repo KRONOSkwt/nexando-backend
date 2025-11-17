@@ -36,3 +36,58 @@ class UserInterest(models.Model):
 
     def __str__(self):
         return f"{self.profile.user.username} - {self.interest.name} ({'Primary' if self.is_primary else 'Secondary'})"
+    
+class MatchAction(models.Model):
+    """
+    Registra una acción (like/pass) de un usuario (actor)
+    hacia otro usuario (target).
+    """
+    class Action(models.TextChoices):
+        LIKE = 'like', 'Like'
+        PASS = 'pass', 'Pass'
+
+    actor = models.ForeignKey(
+        User,
+        related_name='sent_actions',
+        on_delete=models.CASCADE
+    )
+    target = models.ForeignKey(
+        User,
+        related_name='received_actions',
+        on_delete=models.CASCADE
+    )
+    action = models.CharField(
+        max_length=4,
+        choices=Action.choices
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('actor', 'target')
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.actor.username} --{self.action}--> {self.target.username}"
+    
+class Connection(models.Model):
+    """
+    Representa un 'match' exitoso y mutuo entre dos usuarios.
+    """
+    user1 = models.ForeignKey(
+        User,
+        related_name='connections_as_user1',
+        on_delete=models.CASCADE
+    )
+    user2 = models.ForeignKey(
+        User,
+        related_name='connections_as_user2',
+        on_delete=models.CASCADE
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('user1', 'user2')
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user1.username} <--> {self.user2.username}"

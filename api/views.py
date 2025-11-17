@@ -8,9 +8,10 @@ from datetime import timedelta
 # Imports de Django
 from django.core.files.base import ContentFile
 from django.shortcuts import get_object_or_404
-from django.db import IntegrityError, transaction # <-- Importación para transacciones atómicas
+from django.db import IntegrityError, transaction
 from django.contrib.auth.models import User
 from django.conf import settings
+from django.db.models import Count, Q, F
 
 # Imports de Django Rest Framework
 from rest_framework import generics, status
@@ -26,7 +27,7 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
 # Imports locales
-from .models import Profile, Interest 
+from .models import Profile, Interest, MatchAction, Connection
 from .serializers import ProfileSerializer
 
 # --- FUNCIÓN AUXILIAR (sin cambios) ---
@@ -183,3 +184,107 @@ class FirstMatchView(APIView):
             return Response(serializer.data)
         else:
             return Response({'detail': 'No matches found at this time.'}, status=status.HTTP_404_NOT_FOUND)
+        
+class RecommendationView(generics.ListAPIView):
+    """
+    Devuelve una lista paginada de perfiles recomendados,
+    ordenados por un algoritmo de puntuación basado en intereses comunes.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = ProfileSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        
+        # TODO: Optimizar para no hacer estas consultas en cada petición. Cachear.
+        primary_interest_ids = user.profile.userinterest_set.filter(
+            is_primary=True
+        ).values_list('interest_id', flat=True)
+        
+        secondary_interest_ids = user.profile.userinterest_set.filter(
+            is_primary=False
+        ).values_list('interest_id', flat=True)
+        
+        interacted_user_ids = MatchAction.objects.filter(
+            actor=user
+        ).values_list('target_id', flat=True)
+
+        queryset = Profile.objects.annotate(
+            primary_score=Count(
+                'interests',
+                filter=Q(interests__id__in=primary_interest_ids)
+            ),
+            secondary_score=Count(
+                'interests',
+                filter=Q(interests__id__in=secondary_interest_ids)
+            )
+        ).annotate(
+            total_score=F('primary_score') * 2 + F('secondary_score')
+        )
+
+        return queryset.exclude(
+            user=user
+        ).exclude(
+            user_id__in=interacted_user_ids
+        ).filter(
+            total_score__gt=0
+        ).order_by('-total_score', '?')
+    
+class MatchActionView(APIView):
+    """
+    Registra una acción (like/pass) de un usuario hacia otro
+    y detecta si se ha producido un 'match' mutuo.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, *args, **kwargs):
+        actor = request.user
+        target_id = request.data.get('target_id')
+        action = request.data.get('action')
+
+        if not target_id or action not in [MatchAction.Action.LIKE, MatchAction.Action.PASS]:
+            return Response(
+                {'error': 'target_id and a valid action (like/pass) are required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            target = User.objects.get(id=target_id)
+        except User.DoesNotExist:
+            return Response({'error': 'Target user not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if actor == target:
+            return Response({'error': 'Cannot perform action on oneself.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        MatchAction.objects.update_or_create(
+            actor=actor,
+            target=target,
+            defaults={'action': action}
+        )
+
+        if action == MatchAction.Action.LIKE:
+            reciprocal_like_exists = MatchAction.objects.filter(
+                actor=target,
+                target=actor,
+                action=MatchAction.Action.LIKE
+            ).exists()
+
+            if reciprocal_like_exists:
+                user1, user2 = sorted([actor.id, target.id])
+                user1_obj = User.objects.get(id=user1)
+                user2_obj = User.objects.get(id=user2)
+
+                connection, created = Connection.objects.get_or_create(
+                    user1=user1_obj,
+                    user2=user2_obj
+                )
+
+                # TODO: Disparar notificaciones asíncronas a ambos usuarios.
+                
+                return Response({
+                    'status': 'match',
+                    'connection_id': connection.id
+                }, status=status.HTTP_201_CREATED)
+
+        return Response({'status': action}, status=status.HTTP_200_OK)
