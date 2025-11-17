@@ -7,7 +7,6 @@ from .views import (
     UserProfileView,
     ProfilePictureUploadView,
     ProfileDetailView,
-    FirstMatchView,
     RecommendationView,
     MatchActionView,
 )
