@@ -9,6 +9,7 @@ from .views import (
     ProfileDetailView,
     FirstMatchView,
     RecommendationView,
+    MatchActionView,
 )
 
 urlpatterns = [
@@ -20,5 +21,6 @@ urlpatterns = [
     path('profiles/me/picture/', ProfilePictureUploadView.as_view(), name='profile-picture-upload'),
     path('profiles/<int:user_id>/', ProfileDetailView.as_view(), name='profile-detail'),
     path('matches/recommendations/', RecommendationView.as_view(), name='match-recommendations'),
-    path('matches/first/', FirstMatchView.as_view(), name='first-match'),
+    path('matches/action/', MatchActionView.as_view(), name='match-action'),
+    path('matches/first/', FirstMatchView.as_view(), name='first-match'), # TODO: Considerar si esta ruta es ahora obsoleta.
 ]

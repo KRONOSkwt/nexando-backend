@@ -27,7 +27,7 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
 # Imports locales
-from .models import Profile, Interest 
+from .models import Profile, Interest, MatchAction, Connection
 from .serializers import ProfileSerializer
 
 # --- FUNCIÓN AUXILIAR (sin cambios) ---
@@ -229,3 +229,62 @@ class RecommendationView(generics.ListAPIView):
         ).filter(
             total_score__gt=0
         ).order_by('-total_score', '?')
+    
+class MatchActionView(APIView):
+    """
+    Registra una acción (like/pass) de un usuario hacia otro
+    y detecta si se ha producido un 'match' mutuo.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, *args, **kwargs):
+        actor = request.user
+        target_id = request.data.get('target_id')
+        action = request.data.get('action')
+
+        if not target_id or action not in [MatchAction.Action.LIKE, MatchAction.Action.PASS]:
+            return Response(
+                {'error': 'target_id and a valid action (like/pass) are required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            target = User.objects.get(id=target_id)
+        except User.DoesNotExist:
+            return Response({'error': 'Target user not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if actor == target:
+            return Response({'error': 'Cannot perform action on oneself.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        MatchAction.objects.update_or_create(
+            actor=actor,
+            target=target,
+            defaults={'action': action}
+        )
+
+        if action == MatchAction.Action.LIKE:
+            reciprocal_like_exists = MatchAction.objects.filter(
+                actor=target,
+                target=actor,
+                action=MatchAction.Action.LIKE
+            ).exists()
+
+            if reciprocal_like_exists:
+                user1, user2 = sorted([actor.id, target.id])
+                user1_obj = User.objects.get(id=user1)
+                user2_obj = User.objects.get(id=user2)
+
+                connection, created = Connection.objects.get_or_create(
+                    user1=user1_obj,
+                    user2=user2_obj
+                )
+
+                # TODO: Disparar notificaciones asíncronas a ambos usuarios.
+                
+                return Response({
+                    'status': 'match',
+                    'connection_id': connection.id
+                }, status=status.HTTP_201_CREATED)
+
+        return Response({'status': action}, status=status.HTTP_200_OK)

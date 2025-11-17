@@ -68,3 +68,26 @@ class MatchAction(models.Model):
 
     def __str__(self):
         return f"{self.actor.username} --{self.action}--> {self.target.username}"
+    
+class Connection(models.Model):
+    """
+    Representa un 'match' exitoso y mutuo entre dos usuarios.
+    """
+    user1 = models.ForeignKey(
+        User,
+        related_name='connections_as_user1',
+        on_delete=models.CASCADE
+    )
+    user2 = models.ForeignKey(
+        User,
+        related_name='connections_as_user2',
+        on_delete=models.CASCADE
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('user1', 'user2')
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user1.username} <--> {self.user2.username}"
