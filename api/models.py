@@ -28,9 +28,8 @@ class UserInterest(models.Model):
     añadiendo la ponderación (si es primario o no).
     """
     profile = models.ForeignKey(Profile, on_delete=models.CASCADE)
-    interest = models.ForeignKey(Interest, on_delete=models.CASCADE)
+    interest = models.ForeignKey(Interest, on_delete=models.CASCADE, db_index=True)
     is_primary = models.BooleanField(default=False)
-
     class Meta:
         unique_together = ('profile', 'interest')
 
@@ -65,6 +64,9 @@ class MatchAction(models.Model):
     class Meta:
         unique_together = ('actor', 'target')
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['actor', 'target', 'action']),
+        ]
 
     def __str__(self):
         return f"{self.actor.username} --{self.action}--> {self.target.username}"
@@ -88,6 +90,9 @@ class Connection(models.Model):
     class Meta:
         unique_together = ('user1', 'user2')
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user1', 'user2']),
+        ]
 
     def __str__(self):
         return f"{self.user1.username} <--> {self.user2.username}"
