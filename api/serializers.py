@@ -23,6 +23,7 @@ class InterestInputSerializer(serializers.Serializer):
     """
     Serializer para validar la entrada Y salida de cada objeto de interés.
     """
+    # 'source' permite leer el nombre desde la relación (GET)
     name = serializers.CharField(max_length=100, source='interest.name')
     is_primary = serializers.BooleanField()
 
@@ -44,11 +45,18 @@ class ProfileSerializer(serializers.ModelSerializer):
         instance = super().update(instance, validated_data)
 
         if interests_data is not None:
+            # Borramos los intereses antiguos
             UserInterest.objects.filter(profile=instance).delete()
             
             for interest_item in interests_data:
-                interest_name = interest_item.get('name') or interest_item.get('interest', {}).get('name')
+                # Manejo robusto para extraer el nombre tanto si viene serializado (con source)
+                # como si viene directo del frontend.
+                interest_name = interest_item.get('name')
                 
+                # Si DRF aplicó el source='interest.name', el valor podría estar anidado
+                if not interest_name and 'interest' in interest_item:
+                     interest_name = interest_item['interest'].get('name')
+
                 if interest_name:
                     interest_name = interest_name.strip().title()
                     is_primary = interest_item.get('is_primary', False)
