@@ -10,7 +10,9 @@ class Interest(models.Model):
 class Profile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, primary_key=True)
     first_name = models.CharField(max_length=100)
-    profile_picture_url = models.URLField(max_length=255, blank=True)
+    
+    profile_picture_url = models.ImageField(upload_to='profiles/', blank=True, null=True)
+    
     city = models.CharField(max_length=100, blank=True)
     bio = models.TextField(blank=True)
     interests = models.ManyToManyField(
@@ -30,6 +32,7 @@ class UserInterest(models.Model):
     profile = models.ForeignKey(Profile, on_delete=models.CASCADE)
     interest = models.ForeignKey(Interest, on_delete=models.CASCADE, db_index=True)
     is_primary = models.BooleanField(default=False)
+    
     class Meta:
         unique_together = ('profile', 'interest')
 
