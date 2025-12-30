@@ -1,6 +1,10 @@
 from django.db import models
 from django.contrib.auth.models import User
 
+"""
+MODELOS DE DATOS BASE
+"""
+
 class Interest(models.Model):
     name = models.CharField(max_length=100, unique=True)
 
@@ -10,9 +14,7 @@ class Interest(models.Model):
 class Profile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, primary_key=True)
     first_name = models.CharField(max_length=100)
-    
     profile_picture_url = models.ImageField(upload_to='profiles/', blank=True, null=True)
-    
     city = models.CharField(max_length=100, blank=True)
     bio = models.TextField(blank=True)
     interests = models.ManyToManyField(
@@ -26,42 +28,30 @@ class Profile(models.Model):
 
 class UserInterest(models.Model):
     """
-    Tabla intermedia que conecta un Perfil con un Interés,
-    añadiendo la ponderación (si es primario o no).
+    Tabla intermedia para intereses ponderados (Primarios vs Secundarios).
     """
     profile = models.ForeignKey(Profile, on_delete=models.CASCADE)
     interest = models.ForeignKey(Interest, on_delete=models.CASCADE, db_index=True)
     is_primary = models.BooleanField(default=False)
-    
+
     class Meta:
         unique_together = ('profile', 'interest')
 
     def __str__(self):
-        return f"{self.profile.user.username} - {self.interest.name} ({'Primary' if self.is_primary else 'Secondary'})"
-    
+        return f"{self.profile.user.username} - {self.interest.name}"
+
+"""
+MODELOS DE INTERACCIÓN Y MATCHING
+"""
+
 class MatchAction(models.Model):
-    """
-    Registra una acción (like/pass) de un usuario (actor)
-    hacia otro usuario (target).
-    """
     class Action(models.TextChoices):
         LIKE = 'like', 'Like'
         PASS = 'pass', 'Pass'
 
-    actor = models.ForeignKey(
-        User,
-        related_name='sent_actions',
-        on_delete=models.CASCADE
-    )
-    target = models.ForeignKey(
-        User,
-        related_name='received_actions',
-        on_delete=models.CASCADE
-    )
-    action = models.CharField(
-        max_length=4,
-        choices=Action.choices
-    )
+    actor = models.ForeignKey(User, related_name='sent_actions', on_delete=models.CASCADE)
+    target = models.ForeignKey(User, related_name='received_actions', on_delete=models.CASCADE)
+    action = models.CharField(max_length=4, choices=Action.choices)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -71,23 +61,9 @@ class MatchAction(models.Model):
             models.Index(fields=['actor', 'target', 'action']),
         ]
 
-    def __str__(self):
-        return f"{self.actor.username} --{self.action}--> {self.target.username}"
-    
 class Connection(models.Model):
-    """
-    Representa un 'match' exitoso y mutuo entre dos usuarios.
-    """
-    user1 = models.ForeignKey(
-        User,
-        related_name='connections_as_user1',
-        on_delete=models.CASCADE
-    )
-    user2 = models.ForeignKey(
-        User,
-        related_name='connections_as_user2',
-        on_delete=models.CASCADE
-    )
+    user1 = models.ForeignKey(User, related_name='connections_as_user1', on_delete=models.CASCADE)
+    user2 = models.ForeignKey(User, related_name='connections_as_user2', on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -96,6 +72,3 @@ class Connection(models.Model):
         indexes = [
             models.Index(fields=['user1', 'user2']),
         ]
-
-    def __str__(self):
-        return f"{self.user1.username} <--> {self.user2.username}"

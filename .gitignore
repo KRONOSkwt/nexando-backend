@@ -12,4 +12,6 @@ __pycache__/
 *.pyc
 
 # Archivos de staticfiles (Render los generará)
-staticfiles/
+staticfiles/.env 
+
+.env
