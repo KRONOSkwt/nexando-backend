@@ -9,10 +9,13 @@ class InterestInputSerializer(serializers.Serializer):
     is_primary = serializers.BooleanField(default=False)
 
 class ProfileSerializer(serializers.ModelSerializer):
+    id = serializers.IntegerField(source='user.id', read_only=True)
+    
     interests = InterestInputSerializer(many=True, source='userinterest_set', required=False)
+
     class Meta:
         model = Profile
-        fields = ['first_name', 'profile_picture_url', 'city', 'bio', 'interests']
+        fields = ['id', 'first_name', 'profile_picture_url', 'city', 'bio', 'interests']
 
     @transaction.atomic
     def update(self, instance, validated_data):
