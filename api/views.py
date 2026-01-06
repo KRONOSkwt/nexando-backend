@@ -134,7 +134,6 @@ class UserProfileView(APIView):
         serializer = ProfileSerializer(request.user.profile, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
-            # Cache Invalidation
             cache.delete(f"user_{request.user.id}_interests") 
             return Response(serializer.data)
         return Response(serializer.errors, status=400)
@@ -165,43 +164,24 @@ class ProfileDetailView(APIView):
         return Response(serializer.data)
 
 class RecommendationView(generics.ListAPIView):
-    """
-    ALGORITMO ROBUSTO: Basado en el 'Filtro Simple' validado en consola.
-    """
     permission_classes = [IsAuthenticated]
     serializer_class = ProfileSerializer
-
     def get_queryset(self):
         user = self.request.user
-        
-        # 1. Obtener IDs de intereses del usuario (Cacheados por 1 min)
         cache_key = f"user_{user.id}_interests"
         my_interest_ids = cache.get(cache_key)
-        
         if not my_interest_ids:
             my_interest_ids = list(user.profile.userinterest_set.values_list('interest_id', flat=True))
             cache.set(cache_key, my_interest_ids, timeout=60)
-
-        # 2. Obtener IDs de usuarios ya interactuados (Siempre fresco)
         interacted_ids = list(MatchAction.objects.filter(actor=user).values_list('target_id', flat=True))
-
-        # 3. QUERY ROBUSTA (Igual a la prueba de consola)
-        # Filtramos por "tienen al menos un interés en común"
-        # Usamos distinct() para evitar duplicados si coinciden en varios intereses
+        
         queryset = Profile.objects.filter(
             interests__id__in=my_interest_ids
-        ).exclude(
-            user=user
-        ).exclude(
-            user_id__in=interacted_ids
-        ).distinct()
-
-        # 4. Ordenamiento simple: Cantidad de intereses comunes
-        queryset = queryset.annotate(
+        ).exclude(user=user).exclude(user_id__in=interacted_ids).distinct()
+        
+        return queryset.annotate(
             common_count=Count('interests', filter=Q(interests__id__in=my_interest_ids))
         ).order_by('-common_count', '?')
-
-        return queryset
 
 class MatchActionView(APIView):
     permission_classes = [IsAuthenticated]
@@ -210,7 +190,6 @@ class MatchActionView(APIView):
         actor = request.user
         target_id = request.data.get('target_id')
         action = request.data.get('action')
-
         if not target_id or action not in ['like', 'pass']: return Response({'error': 'Invalid data'}, status=400)
         try:
             target = User.objects.get(id=target_id)
@@ -226,5 +205,24 @@ class MatchActionView(APIView):
                 conn, _ = Connection.objects.get_or_create(user1_id=user1, user2_id=user2)
                 send_match_notification_async(actor, target)
                 return Response({'status': 'match', 'connection_id': conn.id}, status=201)
-
         return Response({'status': action}, status=200)
+
+class ConnectionListView(generics.ListAPIView):
+    """
+    Lista los perfiles de los usuarios con los que hay conexión.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = ProfileSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        connections = Connection.objects.filter(Q(user1=user) | Q(user2=user))
+        
+        partner_ids = []
+        for conn in connections:
+            if conn.user1 == user:
+                partner_ids.append(conn.user2.id)
+            else:
+                partner_ids.append(conn.user1.id)
+        
+        return Profile.objects.filter(user__id__in=partner_ids)

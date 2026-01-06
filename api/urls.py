@@ -9,7 +9,8 @@ from .views import (
     ProfilePictureUploadView,
     ProfileDetailView,
     RecommendationView,
-    MatchActionView
+    MatchActionView,
+    ConnectionListView
 )
 
 urlpatterns = [
@@ -28,4 +29,5 @@ urlpatterns = [
     # --- Matching ---
     path('matches/recommendations/', RecommendationView.as_view(), name='match-recommendations'),
     path('matches/action/', MatchActionView.as_view(), name='match-action'),
+    path('connections/', ConnectionListView.as_view(), name='connection-list'),
 ]
