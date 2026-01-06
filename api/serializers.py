@@ -2,7 +2,7 @@ from rest_framework import serializers
 from django.db import transaction
 from django.contrib.auth.models import User
 from rest_framework_simplejwt.tokens import RefreshToken
-from .models import Profile, Interest, UserInterest
+from .models import Profile, Interest, UserInterest, Message
 
 class InterestInputSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=100, source='interest.name')
@@ -68,3 +68,16 @@ class ProfilePictureSerializer(serializers.ModelSerializer):
     class Meta:
         model = Profile
         fields = ['profile_picture_url']
+
+class MessageSerializer(serializers.ModelSerializer):
+    """
+    Serializador para mensajes de chat.
+    Mapea IDs explícitamente para el frontend.
+    """
+    sender_id = serializers.IntegerField(source='sender.id', read_only=True)
+    recipient_id = serializers.IntegerField(source='recipient.id') # Escritura: recibe ID, Lectura: muestra ID
+
+    class Meta:
+        model = Message
+        fields = ['id', 'sender_id', 'recipient_id', 'content', 'timestamp']
+        read_only_fields = ['id', 'sender_id', 'timestamp']

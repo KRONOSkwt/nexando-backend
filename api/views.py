@@ -22,8 +22,8 @@ from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
-from .models import Profile, Interest, UserInterest, MatchAction, Connection
-from .serializers import ProfileSerializer, SignupSerializer, ProfilePictureSerializer
+from .models import Profile, Interest, UserInterest, MatchAction, Connection, Message
+from .serializers import ProfileSerializer, SignupSerializer, ProfilePictureSerializer, MessageSerializer
 
 def send_match_notification_async(user1, user2):
     print(f"--- [NOTIFICATION] Match entre {user1.username} y {user2.username} ---")
@@ -226,3 +226,35 @@ class ConnectionListView(generics.ListAPIView):
                 partner_ids.append(conn.user1.id)
         
         return Profile.objects.filter(user__id__in=partner_ids)
+    
+class SendMessageView(generics.CreateAPIView):
+    """
+    Endpoint para enviar un nuevo mensaje.
+    POST /api/v1/messages/
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = MessageSerializer
+
+    def perform_create(self, serializer):
+        # El sender es siempre el usuario autenticado
+        recipient_id = self.request.data.get('recipient_id')
+        recipient = get_object_or_404(User, pk=recipient_id)
+        serializer.save(sender=self.request.user, recipient=recipient)
+
+class ConversationView(generics.ListAPIView):
+    """
+    Endpoint para obtener el historial con un usuario específico.
+    GET /api/v1/messages/{user_id}/
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = MessageSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        other_user_id = self.kwargs['user_id']
+        
+        # Obtenemos mensajes enviados O recibidos entre estos dos usuarios
+        return Message.objects.filter(
+            Q(sender=user, recipient_id=other_user_id) | 
+            Q(sender_id=other_user_id, recipient=user)
+        ).order_by('timestamp')
