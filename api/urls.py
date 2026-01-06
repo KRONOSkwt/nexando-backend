@@ -10,7 +10,9 @@ from .views import (
     ProfileDetailView,
     RecommendationView,
     MatchActionView,
-    ConnectionListView
+    ConnectionListView,
+    SendMessageView,
+    ConversationView
 )
 
 urlpatterns = [
@@ -30,4 +32,8 @@ urlpatterns = [
     path('matches/recommendations/', RecommendationView.as_view(), name='match-recommendations'),
     path('matches/action/', MatchActionView.as_view(), name='match-action'),
     path('connections/', ConnectionListView.as_view(), name='connection-list'),
+
+    # --- Chat ---
+    path('messages/', SendMessageView.as_view(), name='send-message'),
+    path('messages/<int:user_id>/', ConversationView.as_view(), name='conversation-history'),
 ]

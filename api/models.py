@@ -72,3 +72,22 @@ class Connection(models.Model):
         indexes = [
             models.Index(fields=['user1', 'user2']),
         ]
+
+class Message(models.Model):
+    """
+    Modelo para almacenar mensajes de chat individuales.
+    """
+    sender = models.ForeignKey(User, related_name='sent_messages', on_delete=models.CASCADE)
+    recipient = models.ForeignKey(User, related_name='received_messages', on_delete=models.CASCADE)
+    content = models.TextField()
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['timestamp']
+        indexes = [
+            # Índice compuesto para búsquedas rápidas de historial entre dos personas
+            models.Index(fields=['sender', 'recipient', 'timestamp']),
+        ]
+
+    def __str__(self):
+        return f"{self.sender.username} -> {self.recipient.username}: {self.content[:20]}..."
