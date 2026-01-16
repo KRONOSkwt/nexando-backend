@@ -4,13 +4,16 @@ from django.contrib.auth.models import User
 from rest_framework_simplejwt.tokens import RefreshToken
 from .models import Profile, Interest, UserInterest, Message
 
+# --- UTILS ---
+
 class InterestInputSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=100, source='interest.name')
     is_primary = serializers.BooleanField(default=False)
 
+# --- PROFILE SERIALIZERS ---
+
 class ProfileSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(source='user.id', read_only=True)
-    
     interests = InterestInputSerializer(many=True, source='userinterest_set', required=False)
 
     class Meta:
@@ -29,6 +32,13 @@ class ProfileSerializer(serializers.ModelSerializer):
                     interest_obj, _ = Interest.objects.get_or_create(name=raw_name.strip().title())
                     UserInterest.objects.create(profile=instance, interest=interest_obj, is_primary=item.get('is_primary', False))
         return instance
+
+class ProfilePictureSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Profile
+        fields = ['profile_picture_url']
+
+# --- AUTH SERIALIZERS ---
 
 class SignupSerializer(serializers.ModelSerializer):
     first_name = serializers.CharField(write_only=True, required=True)
@@ -64,20 +74,24 @@ class UserCreateSerializer(serializers.ModelSerializer):
         model = User
         fields = ('email', 'password', 'first_name')
 
-class ProfilePictureSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Profile
-        fields = ['profile_picture_url']
+# --- CHAT SERIALIZER (SECURED) ---
 
 class MessageSerializer(serializers.ModelSerializer):
-    """
-    Serializador para mensajes de chat.
-    Mapea IDs explícitamente para el frontend.
-    """
     sender_id = serializers.IntegerField(source='sender.id', read_only=True)
-    recipient_id = serializers.IntegerField(source='recipient.id') # Escritura: recibe ID, Lectura: muestra ID
+    recipient_id = serializers.IntegerField(source='recipient.id')
 
     class Meta:
         model = Message
         fields = ['id', 'sender_id', 'recipient_id', 'content', 'timestamp']
         read_only_fields = ['id', 'sender_id', 'timestamp']
+
+    def validate_recipient_id(self, value):
+        if not User.objects.filter(pk=value).exists():
+            raise serializers.ValidationError("Recipient user does not exist.")
+        return value
+
+    def validate(self, data):
+        request = self.context.get('request')
+        if request and request.user.id == data.get('recipient')['id']:
+             raise serializers.ValidationError("You cannot send messages to yourself.")
+        return data
