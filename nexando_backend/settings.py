@@ -1,34 +1,31 @@
 """
 Django settings for nexando_backend project.
-SECURE PRODUCTION CONFIGURATION
+AUDITED PRODUCTION CONFIGURATION
 """
 
 import os
 import dj_database_url
 from pathlib import Path
 from datetime import timedelta
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# --- SECURITY CRITICAL CONFIGURATION ---
+# Load environment variables from .env file (for local development)
+load_dotenv(os.path.join(BASE_DIR, '.env'))
 
-# 1. SECRET_KEY: Must serve from environment. Fail if missing.
+# --- SECURITY ---
 SECRET_KEY = os.environ.get('SECRET_KEY')
 if not SECRET_KEY:
     raise ValueError("CRITICAL: SECRET_KEY environment variable is not set!")
 
-# 2. DEBUG: False by default. Only True if explicitly set.
 DEBUG = os.environ.get('DEBUG', 'False') == 'True'
 
 ALLOWED_HOSTS = ['127.0.0.1', 'localhost']
-
 RENDER_EXTERNAL_HOSTNAME = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
 if RENDER_EXTERNAL_HOSTNAME:
     ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
-
-
-# --- APPLICATION DEFINITION ---
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -37,14 +34,10 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-
-    # Third Party Apps
     'rest_framework',
-    'rest_framework_simplejwt.token_blacklist', # Necesario para rotación de tokens
+    'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'sendgrid',
-
-    # Local Apps
     'api',
 ]
 
@@ -79,19 +72,16 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'nexando_backend.wsgi.application'
 
-
 # --- DATABASE ---
-# Optimized connection age for PaaS
 DATABASES = {
     'default': dj_database_url.config(
         default=f'sqlite:///{BASE_DIR / "db.sqlite3"}',
-        conn_max_age=60, # Reduced to 1 minute to prevent stale connections
+        conn_max_age=60,
         conn_health_checks=True,
     )
 }
 
-
-# --- PASSWORD VALIDATION ---
+# --- PASSWORD ---
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
     {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator'},
@@ -99,34 +89,25 @@ AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
 
-
-# --- INTERNATIONALIZATION ---
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'UTC'
 USE_I18N = True
 USE_TZ = True
 
-
-# --- STATIC & MEDIA FILES ---
+# --- STATIC & MEDIA ---
 STATIC_URL = 'static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
-
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
-
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-
-# --- CORS CONFIGURATION (CRITICAL #2) ---
-# Origins loaded from environment, defaulting to localhost for dev
-CORS_ALLOWED_ORIGINS = os.environ.get(
-    'CORS_ALLOWED_ORIGINS', 
-    "http://localhost:3000"
-).split(',')
-
+# --- CORS (CRITICAL FIX #2) ---
+# Allow reading from env, fail safe to local
+cors_env = os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:3000')
+CORS_ALLOWED_ORIGINS = [origin.strip() for origin in cors_env.split(',') if origin.strip()]
 CORS_ALLOW_CREDENTIALS = True
 
-# --- HTTPS SETTINGS (HIGH #10) ---
+# --- HTTPS & SECURITY (HIGH #10) ---
 if not DEBUG:
     SECURE_SSL_REDIRECT = True
     SECURE_HSTS_SECONDS = 31536000
@@ -136,9 +117,7 @@ if not DEBUG:
     CSRF_COOKIE_SECURE = True
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
-
-# --- REST FRAMEWORK & JWT ---
-# Consolidated configuration
+# --- REST FRAMEWORK ---
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
@@ -147,31 +126,31 @@ REST_FRAMEWORK = {
     'PAGE_SIZE': 10,
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
-        'rest_framework.throttling.UserRateThrottle'
+        'rest_framework.throttling.UserRateThrottle',
+        'rest_framework.throttling.ScopedRateThrottle', # NEW: For specific endpoints
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '20/minute', # Basic Rate Limiting
-        'user': '100/minute'
+        'anon': '20/minute',
+        'user': '100/minute',
+        'auth': '5/minute',        # ALTA #5: Stricter for login/register
+        'uploads': '10/hour',      # Limit heavy uploads
+        'messages': '60/minute',   # Anti-spam
     }
 }
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(hours=1), # Increased from 5m
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=7), # Reduced from 90d
-    "ROTATE_REFRESH_TOKENS": True, # Security feature
+    "ACCESS_TOKEN_LIFETIME": timedelta(hours=1),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
     "ALGORITHM": "HS256",
 }
 
-
-# --- THIRD PARTY API KEYS ---
-# Must be loaded from environment
+# --- KEYS ---
 SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL')
 
-
 # --- LOGGING ---
-# Structured logging for production (Console output for Render)
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,

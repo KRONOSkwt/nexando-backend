@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import User
+from django.core.validators import MaxLengthValidator
 
 """
 MODELOS DE DATOS BASE
@@ -14,8 +15,9 @@ class Interest(models.Model):
 class Profile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, primary_key=True)
     first_name = models.CharField(max_length=100)
+    # BAJA #17: Renombrado conceptualmente, mantenemos nombre DB para compatibilidad
     profile_picture_url = models.ImageField(upload_to='profiles/', blank=True, null=True)
-    city = models.CharField(max_length=100, blank=True)
+    city = models.CharField(max_length=100, blank=True, db_index=True) # MEDIO #4: Index en city
     bio = models.TextField(blank=True)
     interests = models.ManyToManyField(
         Interest,
@@ -27,9 +29,6 @@ class Profile(models.Model):
         return self.user.username
 
 class UserInterest(models.Model):
-    """
-    Tabla intermedia para intereses ponderados (Primarios vs Secundarios).
-    """
     profile = models.ForeignKey(Profile, on_delete=models.CASCADE)
     interest = models.ForeignKey(Interest, on_delete=models.CASCADE, db_index=True)
     is_primary = models.BooleanField(default=False)
@@ -79,15 +78,22 @@ class Message(models.Model):
     """
     sender = models.ForeignKey(User, related_name='sent_messages', on_delete=models.CASCADE)
     recipient = models.ForeignKey(User, related_name='received_messages', on_delete=models.CASCADE)
-    content = models.TextField()
+    
+    # ALTA-01: Límite de caracteres para evitar DoS
+    content = models.TextField(
+        validators=[MaxLengthValidator(5000)]
+    )
     timestamp = models.DateTimeField(auto_now_add=True)
+    
+    # MEDIO-06: Tracking de lectura
+    read_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['timestamp']
         indexes = [
-            # Índice compuesto para búsquedas rápidas de historial entre dos personas
             models.Index(fields=['sender', 'recipient', 'timestamp']),
+            models.Index(fields=['recipient', 'sender', 'timestamp']), # MEDIO-05: Índice Inverso
         ]
 
     def __str__(self):
-        return f"{self.sender.username} -> {self.recipient.username}: {self.content[:20]}..."
+        return f"{self.sender.username} -> {self.recipient.username}"

@@ -25,12 +25,26 @@ class ProfileSerializer(serializers.ModelSerializer):
         interests_data = validated_data.pop('userinterest_set', None)
         instance = super().update(instance, validated_data)
         if interests_data is not None:
+            # MEJORA-10: Evitar duplicados en la misma petición
             UserInterest.objects.filter(profile=instance).delete()
+            seen_interests = set()
+            
             for item in interests_data:
-                raw_name = item.get('name') or item.get('interest', {}).get('name')
+                # Lógica robusta para extraer el nombre
+                raw_name = item.get('name')
+                if not raw_name and 'interest' in item:
+                    raw_name = item['interest'].get('name')
+                
                 if raw_name:
-                    interest_obj, _ = Interest.objects.get_or_create(name=raw_name.strip().title())
-                    UserInterest.objects.create(profile=instance, interest=interest_obj, is_primary=item.get('is_primary', False))
+                    clean_name = raw_name.strip().title()
+                    if clean_name not in seen_interests:
+                        seen_interests.add(clean_name)
+                        interest_obj, _ = Interest.objects.get_or_create(name=clean_name)
+                        UserInterest.objects.create(
+                            profile=instance, 
+                            interest=interest_obj, 
+                            is_primary=item.get('is_primary', False)
+                        )
         return instance
 
 class ProfilePictureSerializer(serializers.ModelSerializer):
@@ -59,12 +73,21 @@ class SignupSerializer(serializers.ModelSerializer):
         email = validated_data.get('email')
         user = User.objects.create_user(username=email, email=email, password=password, is_active=True)
         profile = Profile.objects.create(user=user, first_name=first_name)
+        
         if interests_data:
+            seen_interests = set()
             for item in interests_data:
                 raw_name = item.get('name') or item.get('interest', {}).get('name')
                 if raw_name:
-                    interest_obj, _ = Interest.objects.get_or_create(name=raw_name.strip().title())
-                    UserInterest.objects.create(profile=profile, interest=interest_obj, is_primary=item.get('is_primary', False))
+                    clean_name = raw_name.strip().title()
+                    if clean_name not in seen_interests:
+                        seen_interests.add(clean_name)
+                        interest_obj, _ = Interest.objects.get_or_create(name=clean_name)
+                        UserInterest.objects.create(
+                            profile=profile, 
+                            interest=interest_obj, 
+                            is_primary=item.get('is_primary', False)
+                        )
         return user
 
 class UserCreateSerializer(serializers.ModelSerializer):
@@ -92,7 +115,15 @@ class MessageSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         request = self.context.get('request')
-        # BUG FIX: data.get('recipient') es un objeto User, accedemos a .id directamente
-        if request and request.user.id == data.get('recipient').id:
+        # BUG FIX #1: data.get('recipient') es un objeto User ya procesado por DRF
+        recipient_user = data.get('recipient') 
+        # Si recipient_id se pasó como entero, DRF a veces lo deja así o lo convierte.
+        # La forma segura es comparar IDs.
+        
+        recipient_id = data.get('recipient_id') # Si viene raw
+        if not recipient_id and recipient_user:
+            recipient_id = recipient_user.id
+
+        if request and request.user.id == recipient_id:
              raise serializers.ValidationError("You cannot send messages to yourself.")
         return data
