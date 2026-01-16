@@ -1,7 +1,6 @@
-# .gitignore
-
 # Entorno Virtual
 venv/
+env/
 
 # Base de datos local
 db.sqlite3
@@ -11,7 +10,13 @@ db.sqlite3
 __pycache__/
 *.pyc
 
-# Archivos de staticfiles (Render los generará)
-staticfiles/.env 
-
+# Variables de entorno (CRÍTICO: JAMÁS COMENTAR ESTA LÍNEA)
 .env
+
+# Archivos estáticos y media generados
+staticfiles/
+media/
+
+# IDEs
+.vscode/
+.idea/
