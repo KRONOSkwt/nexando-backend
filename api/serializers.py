@@ -92,6 +92,7 @@ class MessageSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         request = self.context.get('request')
-        if request and request.user.id == data.get('recipient')['id']:
+        # BUG FIX: data.get('recipient') es un objeto User, accedemos a .id directamente
+        if request and request.user.id == data.get('recipient').id:
              raise serializers.ValidationError("You cannot send messages to yourself.")
         return data

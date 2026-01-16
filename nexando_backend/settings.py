@@ -117,14 +117,24 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
-# --- CORS CONFIGURATION ---
-# TODO: Move specific origins to environment variables for better security
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "https://nexando-frontend.vercel.app",
-    "https://nexando-demo-final.vercel.app",
-]
-CORS_ALLOW_CREDENTIALS = True # Added as per audit
+# --- CORS CONFIGURATION (CRITICAL #2) ---
+# Origins loaded from environment, defaulting to localhost for dev
+CORS_ALLOWED_ORIGINS = os.environ.get(
+    'CORS_ALLOWED_ORIGINS', 
+    "http://localhost:3000"
+).split(',')
+
+CORS_ALLOW_CREDENTIALS = True
+
+# --- HTTPS SETTINGS (HIGH #10) ---
+if not DEBUG:
+    SECURE_SSL_REDIRECT = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 
 # --- REST FRAMEWORK & JWT ---
