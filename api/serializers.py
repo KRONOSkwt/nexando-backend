@@ -15,22 +15,27 @@ class InterestInputSerializer(serializers.Serializer):
 class ProfileSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(source='user.id', read_only=True)
     interests = InterestInputSerializer(many=True, source='userinterest_set', required=False)
+    profile_picture_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Profile
         fields = ['id', 'first_name', 'profile_picture_url', 'city', 'bio', 'interests']
+
+    def get_profile_picture_url(self, obj):
+        if obj.profile_picture_url:
+            # Esto devuelve la URL completa de Cloudinary (https://res.cloudinary...)
+            return obj.profile_picture_url.url 
+        return None
 
     @transaction.atomic
     def update(self, instance, validated_data):
         interests_data = validated_data.pop('userinterest_set', None)
         instance = super().update(instance, validated_data)
         if interests_data is not None:
-            # MEJORA-10: Evitar duplicados en la misma petición
             UserInterest.objects.filter(profile=instance).delete()
             seen_interests = set()
             
             for item in interests_data:
-                # Lógica robusta para extraer el nombre
                 raw_name = item.get('name')
                 if not raw_name and 'interest' in item:
                     raw_name = item['interest'].get('name')
@@ -48,11 +53,17 @@ class ProfileSerializer(serializers.ModelSerializer):
         return instance
 
 class ProfilePictureSerializer(serializers.ModelSerializer):
+    profile_picture_url = serializers.SerializerMethodField()
+
     class Meta:
         model = Profile
         fields = ['profile_picture_url']
 
-# --- AUTH SERIALIZERS ---
+    def get_profile_picture_url(self, obj):
+        if obj.profile_picture_url:
+            return obj.profile_picture_url.url
+        return None
+
 
 class SignupSerializer(serializers.ModelSerializer):
     first_name = serializers.CharField(write_only=True, required=True)
@@ -97,7 +108,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
         model = User
         fields = ('email', 'password', 'first_name')
 
-# --- CHAT SERIALIZER (SECURED) ---
+# --- CHAT SERIALIZER ---
 
 class MessageSerializer(serializers.ModelSerializer):
     sender_id = serializers.IntegerField(source='sender.id', read_only=True)
@@ -115,12 +126,9 @@ class MessageSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         request = self.context.get('request')
-        # BUG FIX #1: data.get('recipient') es un objeto User ya procesado por DRF
         recipient_user = data.get('recipient') 
-        # Si recipient_id se pasó como entero, DRF a veces lo deja así o lo convierte.
-        # La forma segura es comparar IDs.
+        recipient_id = data.get('recipient_id')
         
-        recipient_id = data.get('recipient_id') # Si viene raw
         if not recipient_id and recipient_user:
             recipient_id = recipient_user.id
 
