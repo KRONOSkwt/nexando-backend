@@ -1,6 +1,6 @@
 """
 Django settings for nexando_backend project.
-AUDITED PRODUCTION CONFIGURATION
+AUDITED PRODUCTION CONFIGURATION v1.0.2
 """
 
 import os
@@ -9,6 +9,7 @@ from pathlib import Path
 from datetime import timedelta
 from dotenv import load_dotenv
 
+# --- BASE CONFIGURATION ---
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -20,6 +21,7 @@ SECRET_KEY = os.environ.get('SECRET_KEY')
 if not SECRET_KEY:
     raise ValueError("CRITICAL: SECRET_KEY environment variable is not set!")
 
+# Default to False in production
 DEBUG = os.environ.get('DEBUG', 'False') == 'True'
 
 ALLOWED_HOSTS = ['127.0.0.1', 'localhost']
@@ -27,6 +29,8 @@ RENDER_EXTERNAL_HOSTNAME = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
 if RENDER_EXTERNAL_HOSTNAME:
     ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
 
+
+# --- APPLICATION DEFINITION ---
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -34,12 +38,16 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'cloudinary_storage',
+
+    # Third Party Apps
+    'cloudinary_storage', # Debe ir antes de django.contrib.staticfiles si se usara para estáticos
     'cloudinary',
     'rest_framework',
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'sendgrid',
+
+    # Local Apps
     'api',
 ]
 
@@ -74,6 +82,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'nexando_backend.wsgi.application'
 
+
 # --- DATABASE ---
 DATABASES = {
     'default': dj_database_url.config(
@@ -83,7 +92,8 @@ DATABASES = {
     )
 }
 
-# --- PASSWORD ---
+
+# --- PASSWORD VALIDATION ---
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
     {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator'},
@@ -91,35 +101,44 @@ AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
 
+
+# --- INTERNATIONALIZATION ---
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'UTC'
 USE_I18N = True
 USE_TZ = True
 
-# --- STATIC & MEDIA FILES ---
+
+# --- STATIC FILES (CSS, JS) ---
 STATIC_URL = 'static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
-# --- CONFIGURACIÓN DE CLOUDINARY (MEDIA) ---
-# Leemos las credenciales
+
+# --- MEDIA FILES (Imágenes de Usuario - CLOUDINARY) ---
+# Configuración explícita para forzar el uso de la nube
 CLOUDINARY_STORAGE = {
     'CLOUD_NAME': os.environ.get('CLOUDINARY_CLOUD_NAME'),
     'API_KEY': os.environ.get('CLOUDINARY_API_KEY'),
     'API_SECRET': os.environ.get('CLOUDINARY_API_SECRET'),
 }
 
+# Definimos el motor de almacenamiento
+# Al usar MediaCloudinaryStorage, Django automáticamente genera URLs absolutas (https://res.cloudinary...)
 DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
 
-MEDIA_URL = '/media/'
 
+# --- DEFAULT AUTO FIELD ---
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+
+# --- CORS CONFIGURATION ---
 # Allow reading from env, fail safe to local
 cors_env = os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:3000')
 CORS_ALLOWED_ORIGINS = [origin.strip() for origin in cors_env.split(',') if origin.strip()]
 CORS_ALLOW_CREDENTIALS = True
 
-# --- HTTPS & SECURITY (HIGH #10) ---
+
+# --- HTTPS & SECURITY (Production Hardening) ---
 if not DEBUG:
     SECURE_SSL_REDIRECT = True
     SECURE_HSTS_SECONDS = 31536000
@@ -129,7 +148,8 @@ if not DEBUG:
     CSRF_COOKIE_SECURE = True
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
-# --- REST FRAMEWORK ---
+
+# --- REST FRAMEWORK CONFIGURATION ---
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
@@ -139,12 +159,12 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
         'rest_framework.throttling.UserRateThrottle',
-        'rest_framework.throttling.ScopedRateThrottle', # NEW: For specific endpoints
+        'rest_framework.throttling.ScopedRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
         'anon': '20/minute',
         'user': '100/minute',
-        'auth': '5/minute',        # ALTA #5: Stricter for login/register
+        'auth': '5/minute',        # Stricter for login/register
         'uploads': '10/hour',      # Limit heavy uploads
         'messages': '60/minute',   # Anti-spam
     }
@@ -158,9 +178,11 @@ SIMPLE_JWT = {
     "ALGORITHM": "HS256",
 }
 
-# --- KEYS ---
+
+# --- THIRD PARTY KEYS ---
 SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL')
+
 
 # --- LOGGING ---
 LOGGING = {
