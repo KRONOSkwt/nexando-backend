@@ -122,9 +122,15 @@ CLOUDINARY_STORAGE = {
     'API_SECRET': os.environ.get('CLOUDINARY_API_SECRET'),
 }
 
-# Definimos el motor de almacenamiento
-# Al usar MediaCloudinaryStorage, Django automáticamente genera URLs absolutas (https://res.cloudinary...)
-DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
+# Definimos el motor de almacenamiento usando STORAGES (Django 4.2+)
+STORAGES = {
+    "default": {
+        "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
 
 
 # --- DEFAULT AUTO FIELD ---

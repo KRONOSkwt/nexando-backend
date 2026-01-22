@@ -24,7 +24,7 @@ class ProfileSerializer(serializers.ModelSerializer):
 
     def get_profile_picture_url(self, obj):
         if obj.profile_picture_url:
-            return cloudinary.CloudinaryImage(obj.profile_picture_url.name).build_url(secure=True)
+            return obj.profile_picture_url.url
         return None
 
     @transaction.atomic
@@ -57,8 +57,7 @@ class ProfilePictureSerializer(serializers.ModelSerializer):
 
     def get_profile_picture_url(self, obj):
         if obj.profile_picture_url:
-            # FORZADO TAMBIÉN AQUÍ
-            return cloudinary.CloudinaryImage(obj.profile_picture_url.name).build_url(secure=True)
+            return obj.profile_picture_url.url
         return None
 
 # --- AUTH SERIALIZERS ---
