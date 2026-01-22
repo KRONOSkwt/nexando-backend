@@ -2,6 +2,7 @@ from rest_framework import serializers
 from django.db import transaction
 from django.contrib.auth.models import User
 from rest_framework_simplejwt.tokens import RefreshToken
+import cloudinary
 from .models import Profile, Interest, UserInterest, Message
 
 # --- UTILS ---
@@ -15,12 +16,16 @@ class InterestInputSerializer(serializers.Serializer):
 class ProfileSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(source='user.id', read_only=True)
     interests = InterestInputSerializer(many=True, source='userinterest_set', required=False)
+    profile_picture_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Profile
         fields = ['id', 'first_name', 'profile_picture_url', 'city', 'bio', 'interests']
-        extra_kwargs = {'profile_picture_url': {'read_only': True}}
 
+    def get_profile_picture_url(self, obj):
+        if obj.profile_picture_url:
+            return cloudinary.CloudinaryImage(obj.profile_picture_url.name).build_url(secure=True)
+        return None
 
     @transaction.atomic
     def update(self, instance, validated_data):
@@ -44,9 +49,17 @@ class ProfileSerializer(serializers.ModelSerializer):
         return instance
 
 class ProfilePictureSerializer(serializers.ModelSerializer):
+    profile_picture_url = serializers.SerializerMethodField()
+
     class Meta:
         model = Profile
         fields = ['profile_picture_url']
+
+    def get_profile_picture_url(self, obj):
+        if obj.profile_picture_url:
+            # FORZADO TAMBIÉN AQUÍ
+            return cloudinary.CloudinaryImage(obj.profile_picture_url.name).build_url(secure=True)
+        return None
 
 # --- AUTH SERIALIZERS ---
 
