@@ -15,16 +15,12 @@ class InterestInputSerializer(serializers.Serializer):
 class ProfileSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(source='user.id', read_only=True)
     interests = InterestInputSerializer(many=True, source='userinterest_set', required=False)
-    profile_picture_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Profile
         fields = ['id', 'first_name', 'profile_picture_url', 'city', 'bio', 'interests']
+        extra_kwargs = {'profile_picture_url': {'read_only': True}}
 
-    def get_profile_picture_url(self, obj):
-        if obj.profile_picture_url:
-            return obj.profile_picture_url.url
-        return None
 
     @transaction.atomic
     def update(self, instance, validated_data):
@@ -48,16 +44,9 @@ class ProfileSerializer(serializers.ModelSerializer):
         return instance
 
 class ProfilePictureSerializer(serializers.ModelSerializer):
-    profile_picture_url = serializers.SerializerMethodField()
-
     class Meta:
         model = Profile
         fields = ['profile_picture_url']
-
-    def get_profile_picture_url(self, obj):
-        if obj.profile_picture_url:
-            return obj.profile_picture_url.url
-        return None
 
 # --- AUTH SERIALIZERS ---
 
