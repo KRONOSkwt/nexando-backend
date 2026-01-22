@@ -2,6 +2,7 @@ from rest_framework import serializers
 from django.db import transaction
 from django.contrib.auth.models import User
 from rest_framework_simplejwt.tokens import RefreshToken
+import cloudinary
 from .models import Profile, Interest, UserInterest, Message
 
 # --- UTILS ---
@@ -23,8 +24,7 @@ class ProfileSerializer(serializers.ModelSerializer):
 
     def get_profile_picture_url(self, obj):
         if obj.profile_picture_url:
-            # Esto devuelve la URL completa de Cloudinary (https://res.cloudinary...)
-            return obj.profile_picture_url.url 
+            return cloudinary.CloudinaryImage(obj.profile_picture_url.name).build_url(secure=True)
         return None
 
     @transaction.atomic
@@ -34,12 +34,8 @@ class ProfileSerializer(serializers.ModelSerializer):
         if interests_data is not None:
             UserInterest.objects.filter(profile=instance).delete()
             seen_interests = set()
-            
             for item in interests_data:
-                raw_name = item.get('name')
-                if not raw_name and 'interest' in item:
-                    raw_name = item['interest'].get('name')
-                
+                raw_name = item.get('name') or item.get('interest', {}).get('name')
                 if raw_name:
                     clean_name = raw_name.strip().title()
                     if clean_name not in seen_interests:
@@ -61,9 +57,10 @@ class ProfilePictureSerializer(serializers.ModelSerializer):
 
     def get_profile_picture_url(self, obj):
         if obj.profile_picture_url:
-            return obj.profile_picture_url.url
+            return cloudinary.CloudinaryImage(obj.profile_picture_url.name).build_url(secure=True)
         return None
 
+# --- AUTH SERIALIZERS ---
 
 class SignupSerializer(serializers.ModelSerializer):
     first_name = serializers.CharField(write_only=True, required=True)
@@ -84,7 +81,6 @@ class SignupSerializer(serializers.ModelSerializer):
         email = validated_data.get('email')
         user = User.objects.create_user(username=email, email=email, password=password, is_active=True)
         profile = Profile.objects.create(user=user, first_name=first_name)
-        
         if interests_data:
             seen_interests = set()
             for item in interests_data:
@@ -94,11 +90,7 @@ class SignupSerializer(serializers.ModelSerializer):
                     if clean_name not in seen_interests:
                         seen_interests.add(clean_name)
                         interest_obj, _ = Interest.objects.get_or_create(name=clean_name)
-                        UserInterest.objects.create(
-                            profile=profile, 
-                            interest=interest_obj, 
-                            is_primary=item.get('is_primary', False)
-                        )
+                        UserInterest.objects.create(profile=profile, interest=interest_obj, is_primary=item.get('is_primary', False))
         return user
 
 class UserCreateSerializer(serializers.ModelSerializer):
@@ -128,10 +120,8 @@ class MessageSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         recipient_user = data.get('recipient') 
         recipient_id = data.get('recipient_id')
-        
         if not recipient_id and recipient_user:
             recipient_id = recipient_user.id
-
         if request and request.user.id == recipient_id:
              raise serializers.ValidationError("You cannot send messages to yourself.")
         return data
