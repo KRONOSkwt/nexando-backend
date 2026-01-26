@@ -9,11 +9,12 @@ from django.core.files.base import ContentFile
 from django.core.cache import cache
 from django.shortcuts import get_object_or_404
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Q, F
+from django.db.models import Count, Q
 from django.contrib.auth.models import User
 from django.conf import settings
+# Validadores de Django
 from django.core.validators import validate_email
-from django.core.exceptions import ValidationError, PermissionDenied
+from django.core.exceptions import ValidationError as DjangoValidationError 
 
 # DRF Imports
 from rest_framework import generics, status
@@ -21,9 +22,9 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.parsers import MultiPartParser, FormParser
-from rest_framework.throttling import AnonRateThrottle, UserRateThrottle, ScopedRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken, AccessToken
 from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
+from rest_framework.exceptions import PermissionDenied
 
 # Third Party
 from sendgrid import SendGridAPIClient
@@ -41,13 +42,13 @@ from .serializers import (
 logger = logging.getLogger(__name__)
 
 # --- CONSTANTES ---
-MAX_PROFILE_PICTURE_SIZE = 5 * 1024 * 1024 # 5MB
-MAX_IMAGE_PIXELS = 4096 * 4096 # 16 MP Limit
+MAX_PROFILE_PICTURE_SIZE = 5 * 1024 * 1024 
+MAX_IMAGE_PIXELS = 4096 * 4096
 
 # --- UTILIDADES ---
 
 def send_match_notification_async(user1, user2):
-    # TODO: Mover a Celery
+    # En el futuro esto irá a Celery
     logger.info(f"Match event triggered: {user1.username} <-> {user2.username}")
 
 def send_magic_link_email(user):
@@ -60,8 +61,6 @@ def send_magic_link_email(user):
     
     token = AccessToken.for_user(user)
     token.set_exp(lifetime=timedelta(minutes=10))
-    
-    # ALTA-04: URL Dinámica
     base_url = os.environ.get('FRONTEND_URL', "http://localhost:3000")
     magic_link_url = f"{base_url}/auth/magic-link/verify/?token={str(token)}"
     
@@ -69,7 +68,7 @@ def send_magic_link_email(user):
         from_email=from_email,
         to_emails=user.email,
         subject='Your Magic Link to Nexando.ai',
-        html_content=f'<strong>Welcome!</strong><br>Click <a href="{magic_link_url}">here</a>. Valid for 10 minutes.'
+        html_content=f'<strong>Welcome!</strong><br>Click <a href="{magic_link_url}">here</a> to continue.'
     )
     
     try:
@@ -87,27 +86,22 @@ def send_magic_link_email(user):
 class SignupView(generics.CreateAPIView):
     permission_classes = [AllowAny]
     serializer_class = SignupSerializer
-    throttle_scope = 'auth' # MEDIO-01
+    throttle_scope = 'auth'
 
     def create(self, request, *args, **kwargs):
         email = request.data.get('email')
-        
-        # ALTA-08: Validación de formato
         try:
             validate_email(email)
-        except ValidationError:
-            return Response({'error': 'Invalid email format'}, status=400)
+        except DjangoValidationError:
+            return Response({'error': 'Invalid email format'}, status=status.HTTP_400_BAD_REQUEST)
 
         if User.objects.filter(username=email).exists():
-             return Response(
-                {'error': 'This email is already registered. Please login.'}, 
-                status=status.HTTP_409_CONFLICT
-            )
+             return Response({'error': 'Email registered. Please login.'}, status=status.HTTP_409_CONFLICT)
         try:
             return super().create(request, *args, **kwargs)
         except Exception as e:
             logger.error("Signup error", exc_info=True)
-            return Response({'error': 'Registration failed.'}, status=500)
+            return Response({'error': 'Registration failed.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class ValidateEmailView(APIView):
     permission_classes = [AllowAny]
@@ -116,12 +110,10 @@ class ValidateEmailView(APIView):
     def post(self, request, *args, **kwargs):
         email = request.data.get('email')
         if not email: return Response({'error': 'Email required'}, status=400)
-        
         try:
             validate_email(email)
-        except ValidationError:
+        except DjangoValidationError:
             return Response({'error': 'Invalid email format'}, status=400)
-
         if User.objects.filter(username=email).exists():
             return Response({'error': 'Email registered'}, status=409)
         return Response(status=204)
@@ -136,22 +128,19 @@ class RegisterView(APIView):
         first_name = request.data.get('first_name')
         interests_data = request.data.get('interests', [])
         
-        # BUG-04: Sanitización de nombre
         if not email or not first_name or not first_name.strip(): 
             return Response({'error': 'Data required'}, status=400)
-        
         first_name = first_name.strip()
         
         try:
             validate_email(email)
-        except ValidationError:
+        except DjangoValidationError:
             return Response({'error': 'Invalid email format'}, status=400)
         
         try:
             user = User.objects.create_user(username=email, email=email, is_active=False)
             profile = Profile.objects.create(user=user, first_name=first_name)
             
-            # Lógica de intereses segura
             seen_interests = set()
             for item in interests_data:
                 name = item.get('name', '').strip().title() if isinstance(item, dict) else str(item).strip().title()
@@ -174,11 +163,9 @@ class LoginView(APIView):
     def post(self, request, *args, **kwargs):
         email = request.data.get('email')
         if not email: return Response({'error': 'Email required'}, status=400)
-        
         try:
             validate_email(email)
-        except ValidationError:
-            # BUG-03: Validación consistente, pero sin revelar error para evitar enumeration
+        except DjangoValidationError:
             return Response({'detail': 'Link sent if exists'}, status=200)
 
         try:
@@ -241,26 +228,20 @@ class ProfilePictureUploadView(APIView):
         if 'profile_picture' not in request.FILES: return Response({'error': 'No file'}, status=400)
         file_obj = request.FILES['profile_picture']
         
-        if file_obj.size > MAX_PROFILE_PICTURE_SIZE:
-            return Response({'error': 'File too large (max 5MB)'}, status=400)
-            
+        if file_obj.size > MAX_PROFILE_PICTURE_SIZE: return Response({'error': 'File too large'}, status=400)
+        
         allowed_extensions = ['jpg', 'jpeg', 'png', 'webp']
         ext = file_obj.name.split('.')[-1].lower()
-        if ext not in allowed_extensions:
-            return Response({'error': 'Invalid file type'}, status=400)
+        if ext not in allowed_extensions: return Response({'error': 'Invalid file type'}, status=400)
 
         profile = request.user.profile
         try:
-            # ALTO-02: Pixel Flood Protection
             img = Image.open(file_obj)
             img.verify()
-            
             file_obj.seek(0)
             img = Image.open(file_obj)
+            if img.width * img.height > MAX_IMAGE_PIXELS: return Response({'error': 'Image too large'}, status=400)
             
-            if img.width * img.height > MAX_IMAGE_PIXELS:
-                return Response({'error': 'Image dimensions too large'}, status=400)
-
             buffer = BytesIO()
             img.save(buffer, format='WEBP', quality=85)
             buffer.seek(0)
@@ -268,7 +249,8 @@ class ProfilePictureUploadView(APIView):
             filename = f'{profile.user.id}_{os.path.splitext(file_obj.name)[0]}.webp'
             profile.profile_picture_url.save(filename, ContentFile(buffer.read()), save=True)
             
-            serializer = ProfileSerializer(profile)
+            # Aquí usamos el ProfilePictureSerializer que mencionaste
+            serializer = ProfilePictureSerializer(profile)
             return Response(serializer.data)
         except Exception as e:
             logger.error("Image Upload Error", exc_info=True)
@@ -276,38 +258,23 @@ class ProfilePictureUploadView(APIView):
 
 class ProfileDetailView(APIView):
     permission_classes = [IsAuthenticated]
-    
     def get(self, request, user_id, format=None):
-        # CRÍTICO-02: Prevenir enumeración/scraping masivo
         target_user = get_object_or_404(User, pk=user_id)
         requester = request.user
         
         # Permitir si es el mismo usuario
         if requester.id == target_user.id:
-            profile = get_object_or_404(Profile, pk=user_id)
-            return Response(ProfileSerializer(profile).data)
-
-        # Permitir si están conectados
+            return Response(ProfileSerializer(get_object_or_404(Profile, pk=user_id)).data)
+        
+        # Permitir si hay conexión
         user1_id, user2_id = sorted([requester.id, target_user.id])
-        is_connected = Connection.objects.filter(user1_id=user1_id, user2_id=user2_id).exists()
+        if Connection.objects.filter(user1_id=user1_id, user2_id=user2_id).exists():
+            return Response(ProfileSerializer(get_object_or_404(Profile, pk=user_id)).data)
         
-        # Permitir si es una recomendación válida (implícito por el algoritmo de match)
-        # Opcional: Verificar caché de recomendaciones si queremos ser estrictos
-        
-        if is_connected:
-            profile = get_object_or_404(Profile, pk=user_id)
-            return Response(ProfileSerializer(profile).data)
-        
-        # Si no están conectados, verificamos si hay una "MatchAction" pendiente (alguien que me dio like)
-        # Esto permite ver el perfil antes de aceptar.
-        has_interaction = MatchAction.objects.filter(actor=target_user, target=requester).exists()
-        
-        if has_interaction:
-             profile = get_object_or_404(Profile, pk=user_id)
-             return Response(ProfileSerializer(profile).data)
+        # Permitir si hay interacción (alguien me dio like)
+        if MatchAction.objects.filter(actor=target_user, target=requester).exists():
+             return Response(ProfileSerializer(get_object_or_404(Profile, pk=user_id)).data)
 
-        # Si llegamos aquí, es un acceso no autorizado a un perfil ajeno
-        # Para evitar enumeración, devolvemos 404 en lugar de 403
         return Response({'detail': 'Not found'}, status=404)
 
 # --- VISTAS DE MATCHING ---
@@ -315,7 +282,7 @@ class ProfileDetailView(APIView):
 class RecommendationView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = ProfileSerializer
-
+    
     def get_queryset(self):
         user = self.request.user
         cache_key = f"user_{user.id}_interests"
@@ -341,7 +308,7 @@ class RecommendationView(generics.ListAPIView):
 
 class MatchActionView(APIView):
     permission_classes = [IsAuthenticated]
-    throttle_scope = 'messages' # Reusing rate limit
+    throttle_scope = 'messages'
     
     def post(self, request, *args, **kwargs):
         actor = request.user
@@ -351,7 +318,6 @@ class MatchActionView(APIView):
         if not target_id or action not in ['like', 'pass']: 
             return Response({'error': 'Invalid data'}, status=400)
         
-        # BUG-05 & BUG-02 Fixes
         with transaction.atomic():
             try:
                 target = User.objects.select_for_update().get(id=target_id)
@@ -367,11 +333,9 @@ class MatchActionView(APIView):
                     user1_id, user2_id = sorted([actor.id, target.id])
                     try:
                         conn, created = Connection.objects.get_or_create(user1_id=user1_id, user2_id=user2_id)
-                        if created:
-                            send_match_notification_async(actor, target)
+                        if created: send_match_notification_async(actor, target)
                     except IntegrityError:
                         conn = Connection.objects.get(user1_id=user1_id, user2_id=user2_id)
-                    
                     return Response({'status': 'match', 'connection_id': conn.id}, status=201)
 
         return Response({'status': action}, status=200)
@@ -394,15 +358,13 @@ class SendMessageView(generics.CreateAPIView):
     throttle_scope = 'messages'
 
     def perform_create(self, serializer):
-        recipient_id = self.request.data.get('recipient_id')
-        recipient = get_object_or_404(User, pk=recipient_id)
+        recipient = serializer.validated_data['recipient']
         
-        # CRÍTICO-01: Verify connection exists
         user1_id, user2_id = sorted([self.request.user.id, recipient.id])
         if not Connection.objects.filter(user1_id=user1_id, user2_id=user2_id).exists():
             raise PermissionDenied("You can only message users you have matched with.")
             
-        serializer.save(sender=self.request.user, recipient=recipient)
+        serializer.save(sender=self.request.user)
 
 class ConversationView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
@@ -412,9 +374,7 @@ class ConversationView(generics.ListAPIView):
         user = self.request.user
         other_user_id = self.kwargs['user_id']
         
-        # CRÍTICO-01 (Lectura): Verificar que somos parte de esta conversación
-        # Simplemente verificar si somos el sender o recipient en la query ya lo hace,
-        # pero es mejor verificar la conexión primero por seguridad.
+        # Validación de lectura
         user1_id, user2_id = sorted([user.id, other_user_id])
         if not Connection.objects.filter(user1_id=user1_id, user2_id=user2_id).exists():
              raise PermissionDenied("Access denied to conversation.")

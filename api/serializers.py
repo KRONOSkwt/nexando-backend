@@ -2,7 +2,6 @@ from rest_framework import serializers
 from django.db import transaction
 from django.contrib.auth.models import User
 from rest_framework_simplejwt.tokens import RefreshToken
-import cloudinary
 from .models import Profile, Interest, UserInterest, Message
 
 # --- UTILS ---
@@ -104,24 +103,21 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
 class MessageSerializer(serializers.ModelSerializer):
     sender_id = serializers.IntegerField(source='sender.id', read_only=True)
-    recipient_id = serializers.IntegerField(source='recipient.id')
+    # Esto acepta un ID (escritura) y lo mapea automáticamente al campo 'recipient' del modelo.
+    recipient_id = serializers.PrimaryKeyRelatedField(
+        source='recipient', 
+        queryset=User.objects.all()
+    )
 
     class Meta:
         model = Message
         fields = ['id', 'sender_id', 'recipient_id', 'content', 'timestamp']
         read_only_fields = ['id', 'sender_id', 'timestamp']
 
-    def validate_recipient_id(self, value):
-        if not User.objects.filter(pk=value).exists():
-            raise serializers.ValidationError("Recipient user does not exist.")
-        return value
-
     def validate(self, data):
         request = self.context.get('request')
-        recipient_user = data.get('recipient') 
-        recipient_id = data.get('recipient_id')
-        if not recipient_id and recipient_user:
-            recipient_id = recipient_user.id
-        if request and request.user.id == recipient_id:
+        recipient_user = data.get('recipient')
+        
+        if request and recipient_user and request.user.id == recipient_user.id:
              raise serializers.ValidationError("You cannot send messages to yourself.")
         return data
