@@ -12,9 +12,11 @@ from django.db import IntegrityError, transaction
 from django.db.models import Count, Q
 from django.contrib.auth.models import User
 from django.conf import settings
-# Validadores de Django
 from django.core.validators import validate_email
 from django.core.exceptions import ValidationError as DjangoValidationError 
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
+from django.utils.encoding import force_bytes, force_str
 
 # DRF Imports
 from rest_framework import generics, status
@@ -29,14 +31,22 @@ from rest_framework.exceptions import PermissionDenied
 # Third Party
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
+import openai
 
 # Local Imports
-from .models import Profile, Interest, UserInterest, MatchAction, Connection, Message
+from .models import Profile, Interest, UserInterest, MatchAction, Connection, Message, Feedback
 from .serializers import (
     ProfileSerializer, 
     SignupSerializer, 
     ProfilePictureSerializer,
-    MessageSerializer
+    MessageSerializer,
+    GoogleLoginSerializer,
+    PasswordResetRequestSerializer,
+    PasswordResetConfirmSerializer,
+    AIChatSerializer,
+    FeedbackSerializer
 )
 
 logger = logging.getLogger(__name__)
@@ -45,43 +55,40 @@ logger = logging.getLogger(__name__)
 MAX_PROFILE_PICTURE_SIZE = 5 * 1024 * 1024 
 MAX_IMAGE_PIXELS = 4096 * 4096
 
-# --- UTILIDADES ---
+"""
+UTILIDADES
+"""
 
 def send_match_notification_async(user1, user2):
-    # En el futuro esto irá a Celery
     logger.info(f"Match event triggered: {user1.username} <-> {user2.username}")
 
-def send_magic_link_email(user):
+def send_email_via_sendgrid(to_email, subject, html_content):
     api_key = settings.SENDGRID_API_KEY
     from_email = settings.DEFAULT_FROM_EMAIL
     
     if not api_key or not from_email:
         logger.critical("Email configuration missing.")
-        raise ValueError("Server configuration error.")
-    
+        return 
+
+    message = Mail(from_email=from_email, to_emails=to_email, subject=subject, html_content=html_content)
+    try:
+        sg = SendGridAPIClient(api_key)
+        sg.send(message)
+    except Exception as e:
+        logger.error(f"Failed to send email to {to_email}: {str(e)}", exc_info=True)
+
+def send_magic_link_email(user):
     token = AccessToken.for_user(user)
     token.set_exp(lifetime=timedelta(minutes=10))
     base_url = os.environ.get('FRONTEND_URL', "http://localhost:3000")
     magic_link_url = f"{base_url}/auth/magic-link/verify/?token={str(token)}"
     
-    message = Mail(
-        from_email=from_email,
-        to_emails=user.email,
-        subject='Your Magic Link to Nexando.ai',
-        html_content=f'<strong>Welcome!</strong><br>Click <a href="{magic_link_url}">here</a> to continue.'
-    )
-    
-    try:
-        sg = SendGridAPIClient(api_key)
-        response = sg.send(message)
-        if response.status_code not in [200, 201, 202]:
-            logger.error(f"SendGrid Error {response.status_code}")
-            raise Exception("Email provider rejected request")
-    except Exception as e:
-        logger.error("Failed to send email", exc_info=True)
-        raise
+    html = f'<strong>Welcome!</strong><br>Click <a href="{magic_link_url}">here</a> to continue.'
+    send_email_via_sendgrid(user.email, 'Your Magic Link to Nexando.ai', html)
 
-# --- VISTAS DE AUTENTICACIÓN ---
+"""
+VISTAS DE AUTENTICACIÓN v1.0
+"""
 
 class SignupView(generics.CreateAPIView):
     permission_classes = [AllowAny]
@@ -203,7 +210,99 @@ class SetPasswordView(APIView):
             logger.error("SetPassword Error", exc_info=True)
             return Response({'error': 'Processing error'}, status=500)
 
-# --- VISTAS DE PERFIL ---
+"""
+VISTAS DE AUTENTICACIÓN v1.1
+"""
+
+class PasswordResetRequestView(APIView):
+    permission_classes = [AllowAny]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        if not serializer.is_valid(): return Response(serializer.errors, status=400)
+
+        email = serializer.validated_data['email']
+        try:
+            user = User.objects.get(email=email)
+            token = default_token_generator.make_token(user)
+            uid = urlsafe_base64_encode(force_bytes(user.pk))
+            base_url = os.environ.get('FRONTEND_URL', "http://localhost:3000")
+            reset_link = f"{base_url}/auth/reset-password?uid={uid}&token={token}"
+            
+            html = f'<strong>Password Reset</strong><br>Click <a href="{reset_link}">here</a> to set a new password.'
+            send_email_via_sendgrid(email, 'Reset your Nexando Password', html)
+            
+        except User.DoesNotExist:
+            pass 
+        
+        return Response({'detail': 'If the email exists, a reset link has been sent.'}, status=200)
+
+class PasswordResetConfirmView(APIView):
+    permission_classes = [AllowAny]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        if not serializer.is_valid(): return Response(serializer.errors, status=400)
+
+        uid = serializer.validated_data['uid']
+        token = serializer.validated_data['token']
+        password = serializer.validated_data['new_password']
+
+        try:
+            user_id = force_str(urlsafe_base64_decode(uid))
+            user = User.objects.get(pk=user_id)
+        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            return Response({'error': 'Invalid link'}, status=400)
+
+        if not default_token_generator.check_token(user, token):
+            return Response({'error': 'Invalid or expired token'}, status=400)
+
+        user.set_password(password)
+        user.save()
+        return Response({'detail': 'Password reset successful.'}, status=200)
+
+class GoogleLoginView(APIView):
+    permission_classes = [AllowAny]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        serializer = GoogleLoginSerializer(data=request.data)
+        if not serializer.is_valid(): return Response(serializer.errors, status=400)
+
+        token = serializer.validated_data['token']
+        GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
+        
+        try:
+            idinfo = id_token.verify_oauth2_token(token, google_requests.Request(), GOOGLE_CLIENT_ID)
+            email = idinfo['email']
+            first_name = idinfo.get('given_name', 'User')
+            
+            user, created = User.objects.get_or_create(
+                username=email, 
+                defaults={'email': email, 'is_active': True}
+            )
+            
+            if created:
+                Profile.objects.create(user=user, first_name=first_name)
+            
+            refresh = RefreshToken.for_user(user)
+            return Response({
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+                'is_new_user': created
+            }, status=200)
+
+        except ValueError:
+            return Response({'error': 'Invalid Google Token'}, status=400)
+        except Exception as e:
+            logger.error(f"Google Login Error: {e}")
+            return Response({'error': 'Authentication failed'}, status=500)
+
+"""
+VISTAS DE PERFIL
+"""
 
 class UserProfileView(APIView):
     permission_classes = [IsAuthenticated]
@@ -228,11 +327,13 @@ class ProfilePictureUploadView(APIView):
         if 'profile_picture' not in request.FILES: return Response({'error': 'No file'}, status=400)
         file_obj = request.FILES['profile_picture']
         
-        if file_obj.size > MAX_PROFILE_PICTURE_SIZE: return Response({'error': 'File too large'}, status=400)
-        
+        if file_obj.size > MAX_PROFILE_PICTURE_SIZE:
+            return Response({'error': 'File too large (max 5MB)'}, status=400)
+            
         allowed_extensions = ['jpg', 'jpeg', 'png', 'webp']
         ext = file_obj.name.split('.')[-1].lower()
-        if ext not in allowed_extensions: return Response({'error': 'Invalid file type'}, status=400)
+        if ext not in allowed_extensions:
+            return Response({'error': 'Invalid file type'}, status=400)
 
         profile = request.user.profile
         try:
@@ -240,8 +341,10 @@ class ProfilePictureUploadView(APIView):
             img.verify()
             file_obj.seek(0)
             img = Image.open(file_obj)
-            if img.width * img.height > MAX_IMAGE_PIXELS: return Response({'error': 'Image too large'}, status=400)
             
+            if img.width * img.height > MAX_IMAGE_PIXELS:
+                return Response({'error': 'Image dimensions too large'}, status=400)
+
             buffer = BytesIO()
             img.save(buffer, format='WEBP', quality=85)
             buffer.seek(0)
@@ -249,7 +352,6 @@ class ProfilePictureUploadView(APIView):
             filename = f'{profile.user.id}_{os.path.splitext(file_obj.name)[0]}.webp'
             profile.profile_picture_url.save(filename, ContentFile(buffer.read()), save=True)
             
-            # Aquí usamos el ProfilePictureSerializer que mencionaste
             serializer = ProfilePictureSerializer(profile)
             return Response(serializer.data)
         except Exception as e:
@@ -258,31 +360,31 @@ class ProfilePictureUploadView(APIView):
 
 class ProfileDetailView(APIView):
     permission_classes = [IsAuthenticated]
+    
     def get(self, request, user_id, format=None):
         target_user = get_object_or_404(User, pk=user_id)
         requester = request.user
         
-        # Permitir si es el mismo usuario
         if requester.id == target_user.id:
             return Response(ProfileSerializer(get_object_or_404(Profile, pk=user_id)).data)
         
-        # Permitir si hay conexión
         user1_id, user2_id = sorted([requester.id, target_user.id])
         if Connection.objects.filter(user1_id=user1_id, user2_id=user2_id).exists():
             return Response(ProfileSerializer(get_object_or_404(Profile, pk=user_id)).data)
         
-        # Permitir si hay interacción (alguien me dio like)
         if MatchAction.objects.filter(actor=target_user, target=requester).exists():
              return Response(ProfileSerializer(get_object_or_404(Profile, pk=user_id)).data)
 
         return Response({'detail': 'Not found'}, status=404)
 
-# --- VISTAS DE MATCHING ---
+"""
+VISTAS DE MATCHING
+"""
 
 class RecommendationView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = ProfileSerializer
-    
+
     def get_queryset(self):
         user = self.request.user
         cache_key = f"user_{user.id}_interests"
@@ -336,6 +438,7 @@ class MatchActionView(APIView):
                         if created: send_match_notification_async(actor, target)
                     except IntegrityError:
                         conn = Connection.objects.get(user1_id=user1_id, user2_id=user2_id)
+                    
                     return Response({'status': 'match', 'connection_id': conn.id}, status=201)
 
         return Response({'status': action}, status=200)
@@ -350,7 +453,9 @@ class ConnectionListView(generics.ListAPIView):
         partner_ids = [conn.user2_id if conn.user1_id == user.id else conn.user1_id for conn in connections]
         return Profile.objects.filter(user__id__in=partner_ids).select_related('user')
 
-# --- CHAT ---
+"""
+VISTAS DE CHAT
+"""
 
 class SendMessageView(generics.CreateAPIView):
     permission_classes = [IsAuthenticated]
@@ -374,7 +479,6 @@ class ConversationView(generics.ListAPIView):
         user = self.request.user
         other_user_id = self.kwargs['user_id']
         
-        # Validación de lectura
         user1_id, user2_id = sorted([user.id, other_user_id])
         if not Connection.objects.filter(user1_id=user1_id, user2_id=user2_id).exists():
              raise PermissionDenied("Access denied to conversation.")
@@ -383,3 +487,52 @@ class ConversationView(generics.ListAPIView):
             Q(sender=user, recipient_id=other_user_id) | 
             Q(sender_id=other_user_id, recipient=user)
         ).order_by('timestamp')
+
+"""
+VISTAS DE FEATURES v1.1
+"""
+
+class AIChatView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_scope = 'messages'
+
+    def post(self, request):
+        serializer = AIChatSerializer(data=request.data)
+        if not serializer.is_valid(): return Response(serializer.errors, status=400)
+
+        user_message = serializer.validated_data['message']
+        history = serializer.validated_data['history']
+        api_key = os.environ.get('OPENAI_API_KEY')
+        
+        if not api_key: return Response({'error': 'AI Service unavailable'}, status=503)
+
+        client = openai.OpenAI(api_key=api_key)
+        messages_payload = [{"role": "system", "content": "Eres NexandoBot, un asistente útil para jóvenes profesionales."}]
+        
+        for msg in history[-4:]:
+            if 'role' in msg and 'content' in msg: messages_payload.append(msg)
+        
+        messages_payload.append({"role": "user", "content": user_message})
+
+        try:
+            completion = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages_payload,
+                max_tokens=300
+            )
+            return Response({'reply': completion.choices[0].message.content}, status=200)
+        except Exception as e:
+            logger.error(f"OpenAI Error: {e}")
+            return Response({'error': 'AI processing failed'}, status=502)
+
+class FeedbackView(generics.CreateAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = FeedbackSerializer
+    throttle_scope = 'uploads'
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+        subject = f"Nuevo Feedback de {self.request.user.username}"
+        html = f"<p>Usuario: {self.request.user.email}</p><p>{serializer.validated_data['content']}</p>"
+        admin_email = os.environ.get('DEFAULT_FROM_EMAIL') 
+        send_email_via_sendgrid(admin_email, subject, html)

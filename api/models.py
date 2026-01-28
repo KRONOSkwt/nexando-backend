@@ -92,8 +92,27 @@ class Message(models.Model):
         ordering = ['timestamp']
         indexes = [
             models.Index(fields=['sender', 'recipient', 'timestamp']),
-            models.Index(fields=['recipient', 'sender', 'timestamp']), # MEDIO-05: Índice Inverso
+            models.Index(fields=['recipient', 'sender', 'timestamp']),
         ]
 
     def __str__(self):
         return f"{self.sender.username} -> {self.recipient.username}"
+
+class Feedback(models.Model):
+    """
+    Modelo para almacenar sugerencias y reportes para Roberto.
+    """
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='feedbacks')
+    content = models.TextField(validators=[MaxLengthValidator(2000)])
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_resolved = models.BooleanField(default=False, verbose_name="¿Resuelto?")
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['created_at']),
+            models.Index(fields=['is_resolved']),
+        ]
+
+    def __str__(self):
+        return f"Feedback de {self.user.username} ({self.created_at.strftime('%d/%m/%Y')})"

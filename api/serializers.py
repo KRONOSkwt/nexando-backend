@@ -2,15 +2,19 @@ from rest_framework import serializers
 from django.db import transaction
 from django.contrib.auth.models import User
 from rest_framework_simplejwt.tokens import RefreshToken
-from .models import Profile, Interest, UserInterest, Message
+from .models import Profile, Interest, UserInterest, Message, Feedback
 
-# --- UTILS ---
+"""
+SERIALIZADORES UTILITARIOS
+"""
 
 class InterestInputSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=100, source='interest.name')
     is_primary = serializers.BooleanField(default=False)
 
-# --- PROFILE SERIALIZERS ---
+"""
+SERIALIZADORES DE PERFIL
+"""
 
 class ProfileSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(source='user.id', read_only=True)
@@ -34,7 +38,10 @@ class ProfileSerializer(serializers.ModelSerializer):
             UserInterest.objects.filter(profile=instance).delete()
             seen_interests = set()
             for item in interests_data:
-                raw_name = item.get('name') or item.get('interest', {}).get('name')
+                raw_name = item.get('name')
+                if not raw_name and 'interest' in item:
+                    raw_name = item['interest'].get('name')
+                
                 if raw_name:
                     clean_name = raw_name.strip().title()
                     if clean_name not in seen_interests:
@@ -59,27 +66,34 @@ class ProfilePictureSerializer(serializers.ModelSerializer):
             return obj.profile_picture_url.url
         return None
 
-# --- AUTH SERIALIZERS ---
+"""
+SERIALIZADORES DE AUTENTICACIÓN v1.0 (CLASICO & MAGIC LINK)
+"""
 
 class SignupSerializer(serializers.ModelSerializer):
     first_name = serializers.CharField(write_only=True, required=True)
     password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
     interests = InterestInputSerializer(many=True, required=False)
     tokens = serializers.SerializerMethodField()
+
     class Meta:
         model = User
         fields = ('email', 'password', 'first_name', 'interests', 'tokens')
+
     def get_tokens(self, user):
         refresh = RefreshToken.for_user(user)
         return {'refresh': str(refresh), 'access': str(refresh.access_token)}
+
     @transaction.atomic
     def create(self, validated_data):
         first_name = validated_data.pop('first_name')
         interests_data = validated_data.pop('interests', [])
         password = validated_data.pop('password')
         email = validated_data.get('email')
+
         user = User.objects.create_user(username=email, email=email, password=password, is_active=True)
         profile = Profile.objects.create(user=user, first_name=first_name)
+
         if interests_data:
             seen_interests = set()
             for item in interests_data:
@@ -99,25 +113,61 @@ class UserCreateSerializer(serializers.ModelSerializer):
         model = User
         fields = ('email', 'password', 'first_name')
 
-# --- CHAT SERIALIZER ---
+"""
+SERIALIZADORES DE AUTENTICACIÓN v1.1 (GOOGLE & RESET)
+"""
+
+class GoogleLoginSerializer(serializers.Serializer):
+    token = serializers.CharField(required=True)
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField(required=True)
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    token = serializers.CharField(required=True)
+    new_password = serializers.CharField(required=True, style={'input_type': 'password'})
+    uid = serializers.CharField(required=True)
+
+"""
+SERIALIZADORES DE CHAT
+"""
 
 class MessageSerializer(serializers.ModelSerializer):
     sender_id = serializers.IntegerField(source='sender.id', read_only=True)
-    # Esto acepta un ID (escritura) y lo mapea automáticamente al campo 'recipient' del modelo.
-    recipient_id = serializers.PrimaryKeyRelatedField(
-        source='recipient', 
-        queryset=User.objects.all()
-    )
+    recipient_id = serializers.IntegerField(source='recipient.id')
 
     class Meta:
         model = Message
         fields = ['id', 'sender_id', 'recipient_id', 'content', 'timestamp']
         read_only_fields = ['id', 'sender_id', 'timestamp']
 
+    def validate_recipient_id(self, value):
+        if not User.objects.filter(pk=value).exists():
+            raise serializers.ValidationError("Recipient user does not exist.")
+        return value
+
     def validate(self, data):
         request = self.context.get('request')
-        recipient_user = data.get('recipient')
+        recipient_user = data.get('recipient') 
+        recipient_id = data.get('recipient_id')
         
-        if request and recipient_user and request.user.id == recipient_user.id:
+        if not recipient_id and recipient_user:
+            recipient_id = recipient_user.id
+
+        if request and request.user.id == recipient_id:
              raise serializers.ValidationError("You cannot send messages to yourself.")
         return data
+
+"""
+SERIALIZADORES DE FEATURES v1.1 (AI & FEEDBACK)
+"""
+
+class AIChatSerializer(serializers.Serializer):
+    message = serializers.CharField(required=True)
+    history = serializers.ListField(child=serializers.DictField(), required=False, default=[])
+
+class FeedbackSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Feedback
+        fields = ['id', 'content', 'created_at']
+        read_only_fields = ['id', 'created_at']

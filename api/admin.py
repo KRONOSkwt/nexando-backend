@@ -1,5 +1,6 @@
 from django.contrib import admin
-from .models import Profile, Interest, UserInterest, MatchAction, Connection
+from .models import Profile, Interest, UserInterest, MatchAction, Connection, Message, Feedback
+
 
 # Configuración para ver los intereses DENTRO del perfil
 class UserInterestInline(admin.TabularInline):
@@ -7,18 +8,30 @@ class UserInterestInline(admin.TabularInline):
     extra = 1
     autocomplete_fields = ['interest']
 
-# Configuración del Perfil
 class ProfileAdmin(admin.ModelAdmin):
     list_display = ('user', 'first_name', 'city')
     search_fields = ('user__username', 'first_name', 'city')
     inlines = [UserInterestInline]
 
-# Configuración de Intereses
 class InterestAdmin(admin.ModelAdmin):
     search_fields = ['name']
+
+# --- CONFIGURACIÓN PARA GESTIÓN DE FEEDBACK ---
+class FeedbackAdmin(admin.ModelAdmin):
+    list_display = ('user', 'content_preview', 'created_at', 'is_resolved')
+    list_filter = ('is_resolved', 'created_at')
+    search_fields = ('user__username', 'user__email', 'content')
+    list_editable = ('is_resolved',)
+    readonly_fields = ('user', 'content', 'created_at')
+
+    def content_preview(self, obj):
+        return obj.content[:50] + "..." if len(obj.content) > 50 else obj.content
+    content_preview.short_description = "Contenido"
 
 # Registro de modelos
 admin.site.register(Profile, ProfileAdmin)
 admin.site.register(Interest, InterestAdmin)
 admin.site.register(MatchAction)
 admin.site.register(Connection)
+admin.site.register(Message)
+admin.site.register(Feedback, FeedbackAdmin)
