@@ -87,7 +87,7 @@ def send_magic_link_email(user):
     send_email_via_sendgrid(user.email, 'Your Magic Link to Nexando.ai', html)
 
 """
-VISTAS DE AUTENTICACIÓN v1.0
+VISTAS DE AUTENTICACIÓN (CORE)
 """
 
 class SignupView(generics.CreateAPIView):
@@ -211,7 +211,7 @@ class SetPasswordView(APIView):
             return Response({'error': 'Processing error'}, status=500)
 
 """
-VISTAS DE AUTENTICACIÓN v1.1
+VISTAS DE AUTENTICACIÓN (EXTENDIDA v1.1)
 """
 
 class PasswordResetRequestView(APIView):
@@ -235,7 +235,6 @@ class PasswordResetRequestView(APIView):
             
         except User.DoesNotExist:
             pass 
-        
         return Response({'detail': 'If the email exists, a reset link has been sent.'}, status=200)
 
 class PasswordResetConfirmView(APIView):
@@ -341,18 +340,13 @@ class ProfilePictureUploadView(APIView):
             img.verify()
             file_obj.seek(0)
             img = Image.open(file_obj)
-            
-            if img.width * img.height > MAX_IMAGE_PIXELS:
-                return Response({'error': 'Image dimensions too large'}, status=400)
-
+            if img.width * img.height > MAX_IMAGE_PIXELS: return Response({'error': 'Image dimensions too large'}, status=400)
             buffer = BytesIO()
             img.save(buffer, format='WEBP', quality=85)
             buffer.seek(0)
-            
             filename = f'{profile.user.id}_{os.path.splitext(file_obj.name)[0]}.webp'
             profile.profile_picture_url.save(filename, ContentFile(buffer.read()), save=True)
-            
-            serializer = ProfilePictureSerializer(profile)
+            serializer = ProfileSerializer(profile)
             return Response(serializer.data)
         except Exception as e:
             logger.error("Image Upload Error", exc_info=True)
@@ -360,21 +354,16 @@ class ProfilePictureUploadView(APIView):
 
 class ProfileDetailView(APIView):
     permission_classes = [IsAuthenticated]
-    
     def get(self, request, user_id, format=None):
         target_user = get_object_or_404(User, pk=user_id)
         requester = request.user
-        
         if requester.id == target_user.id:
             return Response(ProfileSerializer(get_object_or_404(Profile, pk=user_id)).data)
-        
         user1_id, user2_id = sorted([requester.id, target_user.id])
         if Connection.objects.filter(user1_id=user1_id, user2_id=user2_id).exists():
             return Response(ProfileSerializer(get_object_or_404(Profile, pk=user_id)).data)
-        
         if MatchAction.objects.filter(actor=target_user, target=requester).exists():
              return Response(ProfileSerializer(get_object_or_404(Profile, pk=user_id)).data)
-
         return Response({'detail': 'Not found'}, status=404)
 
 """
@@ -389,24 +378,13 @@ class RecommendationView(generics.ListAPIView):
         user = self.request.user
         cache_key = f"user_{user.id}_interests"
         my_interest_ids = cache.get(cache_key)
-        
         if not my_interest_ids:
             my_interest_ids = list(user.profile.userinterest_set.values_list('interest_id', flat=True))
             cache.set(cache_key, my_interest_ids, timeout=60)
-
         interacted_ids = list(MatchAction.objects.filter(actor=user).values_list('target_id', flat=True))
         
-        queryset = Profile.objects.filter(
-            interests__id__in=my_interest_ids
-        ).exclude(
-            user=user
-        ).exclude(
-            user_id__in=interacted_ids
-        ).distinct()
-        
-        return queryset.annotate(
-            common_count=Count('interests', filter=Q(interests__id__in=my_interest_ids))
-        ).order_by('-common_count', '?')
+        queryset = Profile.objects.filter(interests__id__in=my_interest_ids).exclude(user=user).exclude(user_id__in=interacted_ids).distinct()
+        return queryset.annotate(common_count=Count('interests', filter=Q(interests__id__in=my_interest_ids))).order_by('-common_count', '?')
 
 class MatchActionView(APIView):
     permission_classes = [IsAuthenticated]
@@ -416,15 +394,12 @@ class MatchActionView(APIView):
         actor = request.user
         target_id = request.data.get('target_id')
         action = request.data.get('action')
-
-        if not target_id or action not in ['like', 'pass']: 
-            return Response({'error': 'Invalid data'}, status=400)
+        if not target_id or action not in ['like', 'pass']: return Response({'error': 'Invalid data'}, status=400)
         
         with transaction.atomic():
             try:
                 target = User.objects.select_for_update().get(id=target_id)
             except User.DoesNotExist: return Response({'error': 'Not found'}, status=404)
-            
             if actor.id == target.id: return Response({'error': 'Self action'}, status=400)
 
             MatchAction.objects.update_or_create(actor=actor, target=target, defaults={'action': action})
@@ -438,15 +413,12 @@ class MatchActionView(APIView):
                         if created: send_match_notification_async(actor, target)
                     except IntegrityError:
                         conn = Connection.objects.get(user1_id=user1_id, user2_id=user2_id)
-                    
                     return Response({'status': 'match', 'connection_id': conn.id}, status=201)
-
         return Response({'status': action}, status=200)
 
 class ConnectionListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = ProfileSerializer
-
     def get_queryset(self):
         user = self.request.user
         connections = Connection.objects.filter(Q(user1=user) | Q(user2=user))
@@ -465,6 +437,7 @@ class SendMessageView(generics.CreateAPIView):
     def perform_create(self, serializer):
         recipient = serializer.validated_data['recipient']
         
+        # Validar Conexión
         user1_id, user2_id = sorted([self.request.user.id, recipient.id])
         if not Connection.objects.filter(user1_id=user1_id, user2_id=user2_id).exists():
             raise PermissionDenied("You can only message users you have matched with.")
@@ -489,7 +462,7 @@ class ConversationView(generics.ListAPIView):
         ).order_by('timestamp')
 
 """
-VISTAS DE FEATURES v1.1
+VISTAS FEATURES (v1.1)
 """
 
 class AIChatView(APIView):
@@ -502,28 +475,30 @@ class AIChatView(APIView):
 
         user_message = serializer.validated_data['message']
         history = serializer.validated_data['history']
+        
         api_key = os.environ.get('OPENAI_API_KEY')
-        
-        if not api_key: return Response({'error': 'AI Service unavailable'}, status=503)
-
-        client = openai.OpenAI(api_key=api_key)
-        messages_payload = [{"role": "system", "content": "Eres NexandoBot, un asistente útil para jóvenes profesionales."}]
-        
-        for msg in history[-4:]:
-            if 'role' in msg and 'content' in msg: messages_payload.append(msg)
-        
-        messages_payload.append({"role": "user", "content": user_message})
+        if not api_key:
+            return Response({'error': 'AI Service configuration missing'}, status=503)
 
         try:
+            client = openai.OpenAI(api_key=api_key)
+            messages_payload = [{"role": "system", "content": "Eres NexandoBot, un asistente útil para jóvenes profesionales."}]
+            
+            for msg in history[-4:]:
+                if 'role' in msg and 'content' in msg: messages_payload.append(msg)
+            
+            messages_payload.append({"role": "user", "content": user_message})
+
             completion = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-3.5-turbo",
                 messages=messages_payload,
                 max_tokens=300
             )
             return Response({'reply': completion.choices[0].message.content}, status=200)
+            
         except Exception as e:
-            logger.error(f"OpenAI Error: {e}")
-            return Response({'error': 'AI processing failed'}, status=502)
+            logger.error(f"OpenAI API Error: {str(e)}")
+            return Response({'error': 'AI service unavailable'}, status=502)
 
 class FeedbackView(generics.CreateAPIView):
     permission_classes = [IsAuthenticated]
@@ -532,7 +507,6 @@ class FeedbackView(generics.CreateAPIView):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
-        subject = f"Nuevo Feedback de {self.request.user.username}"
-        html = f"<p>Usuario: {self.request.user.email}</p><p>{serializer.validated_data['content']}</p>"
         admin_email = os.environ.get('DEFAULT_FROM_EMAIL') 
-        send_email_via_sendgrid(admin_email, subject, html)
+        if admin_email:
+            send_email_via_sendgrid(admin_email, f"Feedback de {self.request.user.username}", serializer.validated_data['content'])
