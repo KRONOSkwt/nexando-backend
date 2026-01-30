@@ -97,7 +97,6 @@ def send_magic_link_email(user):
     token = AccessToken.for_user(user)
     token.set_exp(lifetime=timedelta(minutes=10))
     
-    # URL dinámica basada en el entorno
     base_url = os.environ.get('FRONTEND_URL', "http://localhost:3000")
     magic_link_url = f"{base_url}/auth/magic-link/verify/?token={str(token)}"
     
@@ -264,7 +263,7 @@ class SetPasswordView(APIView):
 
 class GoogleLoginView(APIView):
     """
-    Login Social con Google.
+    Login Social con Google. Refactorizado para mayor robustez y prevención de Error 500.
     """
     permission_classes = [AllowAny]
     throttle_scope = 'auth'
@@ -282,16 +281,26 @@ class GoogleLoginView(APIView):
             email = idinfo['email']
             first_name = idinfo.get('given_name', 'User')
             
-            user, created = User.objects.get_or_create(
-                email=email, 
-                defaults={'username': email, 'is_active': True, 'first_name': first_name}
-            )
-            
-            # Garantía de Perfil
-            profile, p_created = Profile.objects.get_or_create(
-                user=user, 
-                defaults={'first_name': first_name}
-            )
+            with transaction.atomic():
+                # 1. Intentamos obtener el usuario por email
+                user = User.objects.filter(email=email).first()
+                created = False
+                
+                if not user:
+                    # 2. Si no existe, lo creamos. Usamos email como username.
+                    user = User.objects.create_user(
+                        username=email, 
+                        email=email, 
+                        is_active=True, 
+                        first_name=first_name
+                    )
+                    created = True
+                
+                # 3. Garantizar que el perfil existe siempre (Pilar I fix)
+                Profile.objects.get_or_create(
+                    user=user, 
+                    defaults={'first_name': first_name}
+                )
             
             refresh = RefreshToken.for_user(user)
             return Response({
@@ -302,9 +311,12 @@ class GoogleLoginView(APIView):
 
         except ValueError:
             return Response({'error': 'Invalid Google Token'}, status=status.HTTP_400_BAD_REQUEST)
+        except IntegrityError as e:
+            logger.error(f"Google Integrity Conflict: {e}")
+            return Response({'error': 'A database conflict occurred during login.'}, status=status.HTTP_409_CONFLICT)
         except Exception as e:
-            logger.error(f"Google Login Error: {e}")
-            return Response({'error': 'Authentication failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.error(f"Google Login Error: {e}", exc_info=True)
+            return Response({'error': 'Authentication failed due to server error.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 """
@@ -372,7 +384,6 @@ class UserProfileView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, format=None):
-        # Garantía de perfil en cada consulta
         profile, created = Profile.objects.get_or_create(
             user=request.user, 
             defaults={'first_name': request.user.first_name or 'User'}
@@ -432,25 +443,19 @@ class ProfilePictureUploadView(APIView):
 
 
 class ProfileDetailView(APIView):
-    """
-    Ver detalles públicos de otro perfil (protegido por privacidad).
-    """
     permission_classes = [IsAuthenticated]
 
     def get(self, request, user_id, format=None):
         target = get_object_or_404(User, pk=user_id)
         req = request.user
         
-        # Permitir si es uno mismo
         if req.id == target.id:
             return Response(ProfileSerializer(target.profile).data)
             
-        # Permitir si hay conexión
         u1, u2 = sorted([req.id, target.id])
         if Connection.objects.filter(user1_id=u1, user2_id=u2).exists():
             return Response(ProfileSerializer(target.profile).data)
             
-        # Permitir si hubo un Like previo de la otra persona (para ver quién me dio like)
         if MatchAction.objects.filter(actor=target, target=req, action='like').exists():
              return Response(ProfileSerializer(target.profile).data)
 
@@ -462,9 +467,6 @@ BLOQUE: MATCHING Y CONEXIONES
 """
 
 class RecommendationView(generics.ListAPIView):
-    """
-    Algoritmo de recomendaciones basado en intereses comunes.
-    """
     permission_classes = [IsAuthenticated]
     serializer_class = ProfileSerializer
 
@@ -489,9 +491,6 @@ class RecommendationView(generics.ListAPIView):
 
 
 class MatchActionView(APIView):
-    """
-    Acción de Like/Pass y detección de Matches mutuos.
-    """
     permission_classes = [IsAuthenticated]
     throttle_scope = 'messages'
 
@@ -532,9 +531,6 @@ class MatchActionView(APIView):
 
 
 class ConnectionListView(generics.ListAPIView):
-    """
-    Lista de todos los usuarios con los que existe un match.
-    """
     permission_classes = [IsAuthenticated]
     serializer_class = ProfileSerializer
 
@@ -550,9 +546,6 @@ BLOQUE: MENSAJERÍA (CHAT)
 """
 
 class SendMessageView(generics.CreateAPIView):
-    """
-    Envío de mensajes privados (solo entre usuarios conectados).
-    """
     permission_classes = [IsAuthenticated]
     serializer_class = MessageSerializer
     throttle_scope = 'messages'
@@ -568,9 +561,6 @@ class SendMessageView(generics.CreateAPIView):
 
 
 class ConversationView(generics.ListAPIView):
-    """
-    Historial de mensajes entre dos usuarios.
-    """
     permission_classes = [IsAuthenticated]
     serializer_class = MessageSerializer
 
@@ -593,9 +583,6 @@ BLOQUE: INTELIGENCIA ARTIFICIAL Y COMUNIDAD
 """
 
 class AIChatView(APIView):
-    """
-    Chatbot inteligente (NexandoBot).
-    """
     permission_classes = [IsAuthenticated]
     throttle_scope = 'messages'
 
@@ -615,7 +602,7 @@ class AIChatView(APIView):
             client = openai.OpenAI(api_key=api_key)
             messages_payload = [{"role": "system", "content": "Eres NexandoBot, un asistente útil para jóvenes profesionales."}]
             
-            for msg in history[-4:]: # Contexto de los últimos 4 mensajes
+            for msg in history[-4:]: 
                 if 'role' in msg and 'content' in msg:
                     messages_payload.append(msg)
             
@@ -633,16 +620,12 @@ class AIChatView(APIView):
 
 
 class FeedbackView(generics.CreateAPIView):
-    """
-    Envío de sugerencias y reportes para la administración.
-    """
     permission_classes = [IsAuthenticated]
     serializer_class = FeedbackSerializer
     throttle_scope = 'uploads'
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
-        # Notificar al administrador
         admin_email = os.environ.get('DEFAULT_FROM_EMAIL') 
         if admin_email:
             subject = f"New User Feedback: {self.request.user.username}"
