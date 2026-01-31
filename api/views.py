@@ -17,6 +17,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
+from django.template.loader import render_to_string
 
 # DRF Imports
 from rest_framework import generics, status
@@ -56,7 +57,7 @@ MAX_PROFILE_PICTURE_SIZE = 5 * 1024 * 1024
 MAX_IMAGE_PIXELS = 4096 * 4096
 
 """
-BLOQUE: UTILIDADES Y SERVICIOS EXTERNOS
+BLOQUE: UTILIDADES Y SERVICIOS EXTERNOS (EMAIL & NOTIFICACIONES)
 """
 
 def send_match_notification_async(user1, user2):
@@ -85,33 +86,89 @@ def send_email_via_sendgrid(to_email, subject, html_content):
     )
     try:
         sg = SendGridAPIClient(api_key)
-        sg.send(message)
+        response = sg.send(message)
+        if response.status_code not in [200, 201, 202]:
+            logger.error(f"SendGrid rejected mail: {response.body}")
     except Exception as e:
         logger.error(f"Failed to send email to {to_email}: {str(e)}", exc_info=True)
 
 
-def send_magic_link_email(user):
+def get_email_content(lang, link_type, link_url):
     """
-    Genera y envía el token de acceso para el flujo Passwordless.
+    Define los textos traducidos para los correos estéticos.
+    """
+    translations = {
+        'en': {
+            'magic_link': {
+                'subject': 'Your Magic Link for Nexando.ai',
+                'title': 'Welcome Back!',
+                'message_body': 'Click the button below to securely access your account. No password required.',
+                'cta_text': 'Sign in to Nexando',
+                'disclaimer': 'This link is valid for 10 minutes. If you did not request this, please ignore this email.'
+            },
+            'password_reset': {
+                'subject': 'Reset your Nexando Password',
+                'title': 'Reset Your Password',
+                'message_body': 'We received a request to reset your password. Click below to choose a new one.',
+                'cta_text': 'Reset Password',
+                'disclaimer': 'If you did not request a password reset, no further action is required.'
+            }
+        },
+        'es': {
+            'magic_link': {
+                'subject': 'Tu enlace mágico para Nexando.ai',
+                'title': '¡Hola de nuevo!',
+                'message_body': 'Haz clic en el botón de abajo para acceder de forma segura a tu cuenta. Sin contraseñas.',
+                'cta_text': 'Entrar a Nexando',
+                'disclaimer': 'Este enlace es válido por 10 minutos. Si no solicitaste esto, puedes ignorar este correo.'
+            },
+            'password_reset': {
+                'subject': 'Restablece tu contraseña de Nexando',
+                'title': 'Restablecer Contraseña',
+                'message_body': 'Recibimos una solicitud para restablecer tu contraseña. Haz clic abajo para elegir una nueva.',
+                'cta_text': 'Restablecer Contraseña',
+                'disclaimer': 'Si no solicitaste restablecer tu contraseña, no es necesario realizar ninguna acción.'
+            }
+        }
+    }
+    
+    selected_lang = lang if lang in translations else 'en'
+    content = translations[selected_lang][link_type]
+    content['link'] = link_url
+    return content
+
+
+def send_aesthetic_email(to_email, lang, link_type, link_url):
+    """
+    Renderiza la plantilla HTML y envía el correo con diseño.
+    """
+    content_data = get_email_content(lang, link_type, link_url)
+    html_content = render_to_string('emails/magic_link.html', content_data)
+    
+    send_email_via_sendgrid(
+        to_email=to_email,
+        subject=content_data['subject'],
+        html_content=html_content
+    )
+
+
+def send_magic_link_email(user, lang='en'):
+    """
+    Genera el token y dispara el correo estético de Magic Link.
     """
     token = AccessToken.for_user(user)
     token.set_exp(lifetime=timedelta(minutes=10))
-    
     base_url = os.environ.get('FRONTEND_URL', "http://localhost:3000")
     magic_link_url = f"{base_url}/auth/magic-link/verify/?token={str(token)}"
     
-    html = f'<strong>Welcome to Nexando!</strong><br>Click <a href="{magic_link_url}">here</a> to continue.'
-    send_email_via_sendgrid(user.email, 'Your Magic Link to Nexando.ai', html)
+    send_aesthetic_email(user.email, lang, 'magic_link', magic_link_url)
 
 
 """
-BLOQUE: VISTAS DE AUTENTICACIÓN (REGISTRO Y LOGIN)
+BLOQUE: VISTAS DE AUTENTICACIÓN (HÍBRIDA & SOCIAL)
 """
 
 class SignupView(generics.CreateAPIView):
-    """
-    Registro clásico con Email y Password.
-    """
     permission_classes = [AllowAny]
     serializer_class = SignupSerializer
     throttle_scope = 'auth'
@@ -121,61 +178,52 @@ class SignupView(generics.CreateAPIView):
         try:
             validate_email(email)
         except DjangoValidationError:
-            return Response({'error': 'Invalid email format'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Invalid email format'}, status=400)
 
         if User.objects.filter(username=email).exists():
-             return Response({'error': 'Email already registered. Please login.'}, status=status.HTTP_409_CONFLICT)
+             return Response({'error': 'Email registered. Please login.'}, status=409)
         
         try:
             return super().create(request, *args, **kwargs)
         except Exception as e:
             logger.error("Signup error", exc_info=True)
-            return Response({'error': 'Registration failed due to server error.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'error': 'Registration failed.'}, status=500)
 
 
 class ValidateEmailView(APIView):
-    """
-    Verificación proactiva de disponibilidad de email.
-    """
     permission_classes = [AllowAny]
     throttle_scope = 'auth'
 
     def post(self, request, *args, **kwargs):
         email = request.data.get('email')
-        if not email:
-            return Response({'error': 'Email required'}, status=status.HTTP_400_BAD_REQUEST)
-        
+        if not email: return Response({'error': 'Email required'}, status=400)
         try:
             validate_email(email)
         except DjangoValidationError:
-            return Response({'error': 'Invalid email format'}, status=status.HTTP_400_BAD_REQUEST)
-
+            return Response({'error': 'Invalid email format'}, status=400)
         if User.objects.filter(username=email).exists():
-            return Response({'error': 'Email already registered'}, status=status.HTTP_409_CONFLICT)
-        
-        return Response(status=status.HTTP_204_NO_CONTENT)
+            return Response({'error': 'Email registered'}, status=409)
+        return Response(status=204)
 
 
 class RegisterView(APIView):
-    """
-    Registro Passwordless (Onboarding inicial).
-    """
     permission_classes = [AllowAny]
     throttle_scope = 'auth'
 
     @transaction.atomic
     def post(self, request, *args, **kwargs):
+        user_lang = request.META.get('HTTP_ACCEPT_LANGUAGE', 'en')[:2]
         email = request.data.get('email')
         first_name = request.data.get('first_name')
         interests_data = request.data.get('interests', [])
         
         if not email or not first_name or not first_name.strip():
-            return Response({'error': 'Email and first name are required.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Email and name required'}, status=400)
         
         try:
             validate_email(email)
         except DjangoValidationError:
-            return Response({'error': 'Invalid email format'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Invalid email format'}, status=400)
         
         try:
             user = User.objects.create_user(username=email, email=email, is_active=False)
@@ -187,136 +235,77 @@ class RegisterView(APIView):
                 if name and name not in seen_interests:
                     seen_interests.add(name)
                     interest_obj, _ = Interest.objects.get_or_create(name=name)
-                    is_primary = item.get('is_primary', False) if isinstance(item, dict) else False
-                    UserInterest.objects.create(profile=profile, interest=interest_obj, is_primary=is_primary)
+                    UserInterest.objects.create(profile=profile, interest=interest_obj, is_primary=item.get('is_primary', False) if isinstance(item, dict) else False)
             
-            send_magic_link_email(user)
-            return Response({'detail': 'Magic link sent to your email.'}, status=status.HTTP_201_CREATED)
+            send_magic_link_email(user, lang=user_lang)
+            return Response({'detail': 'Magic link sent.'}, status=201)
         except Exception as e:
             logger.error("RegisterView Error", exc_info=True)
-            return Response({'error': 'Service temporarily unavailable'}, status=status.HTTP_502_BAD_GATEWAY)
+            return Response({'error': 'Service unavailable'}, status=502)
 
 
 class LoginView(APIView):
-    """
-    Solicitud de Magic Link para usuarios existentes.
-    """
     permission_classes = [AllowAny]
     throttle_scope = 'auth'
 
     def post(self, request, *args, **kwargs):
+        user_lang = request.META.get('HTTP_ACCEPT_LANGUAGE', 'en')[:2]
         email = request.data.get('email')
-        if not email:
-            return Response({'error': 'Email required'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        try:
-            validate_email(email)
-        except DjangoValidationError:
-            return Response({'detail': 'Link sent if account exists'}, status=status.HTTP_200_OK)
-
+        if not email: return Response({'error': 'Email required'}, status=400)
         try:
             user = User.objects.get(username=email)
-            send_magic_link_email(user)
+            send_magic_link_email(user, lang=user_lang)
         except User.DoesNotExist:
             pass
-            
-        return Response({'detail': 'If an account with that email exists, a link has been sent.'}, status=status.HTTP_200_OK)
+        return Response({'detail': 'If an account exists, a link has been sent.'}, status=200)
 
 
 class SetPasswordView(APIView):
-    """
-    Paso final del Onboarding: Establecer contraseña y activar cuenta.
-    """
     permission_classes = [AllowAny]
     throttle_scope = 'auth'
 
     def post(self, request, *args, **kwargs):
         token_str = request.data.get('token')
         password = request.data.get('password')
-        
-        if not token_str or not password:
-            return Response({'error': 'Token and password are required.'}, status=status.HTTP_400_BAD_REQUEST)
-        
+        if not token_str or not password: return Response({'error': 'Data required'}, status=400)
         try:
-            token = AccessToken(token_str)
-            token.verify()
-            
+            token = AccessToken(token_str); token.verify()
             user = User.objects.get(id=token['user_id'])
-            user.set_password(password)
-            user.is_active = True
-            user.save()
-            
-            # Garantizar perfil
+            user.set_password(password); user.is_active = True; user.save()
             Profile.objects.get_or_create(user=user, defaults={'first_name': user.first_name or 'User'})
-            
             tokens = RefreshToken.for_user(user)
-            return Response({
-                'refresh': str(tokens),
-                'access': str(tokens.access_token)
-            }, status=status.HTTP_200_OK)
-        except (TokenError, InvalidToken):
-            return Response({'error': 'Invalid or expired token'}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({'refresh': str(tokens), 'access': str(tokens.access_token)}, status=200)
+        except (TokenError, InvalidToken): return Response({'error': 'Invalid token'}, status=401)
         except Exception as e:
             logger.error("SetPassword Error", exc_info=True)
-            return Response({'error': 'An internal error occurred'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'error': 'Processing error'}, status=500)
 
 
 class GoogleLoginView(APIView):
-    """
-    Login Social con Google. Refactorizado para mayor robustez y prevención de Error 500.
-    """
     permission_classes = [AllowAny]
     throttle_scope = 'auth'
 
     def post(self, request):
         serializer = GoogleLoginSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
+        if not serializer.is_valid(): return Response(serializer.errors, status=400)
         token = serializer.validated_data['token']
         GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
-        
         try:
             idinfo = id_token.verify_oauth2_token(token, google_requests.Request(), GOOGLE_CLIENT_ID)
-            email = idinfo['email']
-            first_name = idinfo.get('given_name', 'User')
-            
+            email = idinfo['email']; first_name = idinfo.get('given_name', 'User')
             with transaction.atomic():
-                # 1. Intentamos obtener el usuario por email
                 user = User.objects.filter(email=email).first()
                 created = False
-                
                 if not user:
-                    # 2. Si no existe, lo creamos. Usamos email como username.
-                    user = User.objects.create_user(
-                        username=email, 
-                        email=email, 
-                        is_active=True, 
-                        first_name=first_name
-                    )
+                    user = User.objects.create_user(username=email, email=email, is_active=True, first_name=first_name)
                     created = True
-                
-                # 3. Garantizar que el perfil existe siempre (Pilar I fix)
-                Profile.objects.get_or_create(
-                    user=user, 
-                    defaults={'first_name': first_name}
-                )
-            
+                Profile.objects.get_or_create(user=user, defaults={'first_name': first_name})
             refresh = RefreshToken.for_user(user)
-            return Response({
-                'refresh': str(refresh),
-                'access': str(refresh.access_token),
-                'is_new_user': created
-            }, status=status.HTTP_200_OK)
-
-        except ValueError:
-            return Response({'error': 'Invalid Google Token'}, status=status.HTTP_400_BAD_REQUEST)
-        except IntegrityError as e:
-            logger.error(f"Google Integrity Conflict: {e}")
-            return Response({'error': 'A database conflict occurred during login.'}, status=status.HTTP_409_CONFLICT)
+            return Response({'refresh': str(refresh), 'access': str(refresh.access_token), 'is_new_user': created}, status=200)
+        except ValueError: return Response({'error': 'Invalid Google Token'}, status=400)
         except Exception as e:
             logger.error(f"Google Login Error: {e}", exc_info=True)
-            return Response({'error': 'Authentication failed due to server error.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'error': 'Authentication failed'}, status=500)
 
 
 """
@@ -328,25 +317,19 @@ class PasswordResetRequestView(APIView):
     throttle_scope = 'auth'
 
     def post(self, request):
+        user_lang = request.META.get('HTTP_ACCEPT_LANGUAGE', 'en')[:2]
         serializer = PasswordResetRequestSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-            
+        if not serializer.is_valid(): return Response(serializer.errors, status=400)
         email = serializer.validated_data['email']
         try:
             user = User.objects.get(email=email)
             token = default_token_generator.make_token(user)
             uid = urlsafe_base64_encode(force_bytes(user.pk))
-            
             base_url = os.environ.get('FRONTEND_URL', "http://localhost:3000")
             reset_link = f"{base_url}/auth/reset-password?uid={uid}&token={token}"
-            
-            html = f'<strong>Password Reset</strong><br>Click <a href="{reset_link}">here</a> to set a new password.'
-            send_email_via_sendgrid(email, 'Reset your Nexando Password', html)
-        except User.DoesNotExist:
-            pass 
-            
-        return Response({'detail': 'If the email exists, a reset link has been sent.'}, status=status.HTTP_200_OK)
+            send_aesthetic_email(email, user_lang, 'password_reset', reset_link)
+        except User.DoesNotExist: pass 
+        return Response({'detail': 'If the email exists, a reset link has been sent.'}, status=200)
 
 
 class PasswordResetConfirmView(APIView):
@@ -355,25 +338,14 @@ class PasswordResetConfirmView(APIView):
 
     def post(self, request):
         serializer = PasswordResetConfirmSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        uid = serializer.validated_data['uid']
-        token = serializer.validated_data['token']
-        password = serializer.validated_data['new_password']
-
+        if not serializer.is_valid(): return Response(serializer.errors, status=400)
+        uid = serializer.validated_data['uid']; token = serializer.validated_data['token']; password = serializer.validated_data['new_password']
         try:
-            user_id = force_str(urlsafe_base64_decode(uid))
-            user = User.objects.get(pk=user_id)
-        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
-            return Response({'error': 'Invalid link'}, status=status.HTTP_400_BAD_REQUEST)
-
-        if not default_token_generator.check_token(user, token):
-            return Response({'error': 'Invalid or expired token'}, status=status.HTTP_400_BAD_REQUEST)
-
-        user.set_password(password)
-        user.save()
-        return Response({'detail': 'Password reset successful.'}, status=status.HTTP_200_OK)
+            user_id = force_str(urlsafe_base64_decode(uid)); user = User.objects.get(pk=user_id)
+        except (TypeError, ValueError, OverflowError, User.DoesNotExist): return Response({'error': 'Invalid link'}, status=400)
+        if not default_token_generator.check_token(user, token): return Response({'error': 'Invalid or expired token'}, status=400)
+        user.set_password(password); user.save()
+        return Response({'detail': 'Password reset successful.'}, status=200)
 
 
 """
@@ -384,21 +356,16 @@ class UserProfileView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, format=None):
-        profile, created = Profile.objects.get_or_create(
-            user=request.user, 
-            defaults={'first_name': request.user.first_name or 'User'}
-        )
-        serializer = ProfileSerializer(profile)
-        return Response(serializer.data)
+        profile, _ = Profile.objects.get_or_create(user=request.user, defaults={'first_name': request.user.first_name or 'User'})
+        return Response(ProfileSerializer(profile).data)
     
     def patch(self, request, format=None):
-        profile, created = Profile.objects.get_or_create(user=request.user)
+        profile, _ = Profile.objects.get_or_create(user=request.user)
         serializer = ProfileSerializer(profile, data=request.data, partial=True)
         if serializer.is_valid():
-            serializer.save()
-            cache.delete(f"user_{request.user.id}_interests") 
+            serializer.save(); cache.delete(f"user_{request.user.id}_interests") 
             return Response(serializer.data)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        return Response(serializer.errors, status=400)
 
 
 class ProfilePictureUploadView(APIView):
@@ -407,59 +374,31 @@ class ProfilePictureUploadView(APIView):
     throttle_scope = 'uploads'
 
     def put(self, request, format=None):
-        if 'profile_picture' not in request.FILES:
-            return Response({'error': 'No file submitted'}, status=status.HTTP_400_BAD_REQUEST)
-            
+        if 'profile_picture' not in request.FILES: return Response({'error': 'No file'}, status=400)
         file_obj = request.FILES['profile_picture']
-        
-        if file_obj.size > MAX_PROFILE_PICTURE_SIZE:
-            return Response({'error': 'File too large (max 5MB)'}, status=status.HTTP_400_BAD_REQUEST)
-            
-        allowed = ['jpg', 'jpeg', 'png', 'webp']
-        if file_obj.name.split('.')[-1].lower() not in allowed:
-            return Response({'error': 'Invalid file type'}, status=status.HTTP_400_BAD_REQUEST)
-
+        if file_obj.size > MAX_PROFILE_PICTURE_SIZE: return Response({'error': 'File too large'}, status=400)
+        if file_obj.name.split('.')[-1].lower() not in ['jpg', 'jpeg', 'png', 'webp']: return Response({'error': 'Invalid type'}, status=400)
         profile = request.user.profile
         try:
-            img = Image.open(file_obj)
-            img.verify()
-            file_obj.seek(0)
-            img = Image.open(file_obj)
-            
-            if img.width * img.height > MAX_IMAGE_PIXELS:
-                return Response({'error': 'Dimensions too large'}, status=status.HTTP_400_BAD_REQUEST)
-                
-            buffer = BytesIO()
-            img.save(buffer, format='WEBP', quality=85)
-            buffer.seek(0)
-            
+            img = Image.open(file_obj); img.verify(); file_obj.seek(0); img = Image.open(file_obj)
+            if img.width * img.height > MAX_IMAGE_PIXELS: return Response({'error': 'Dimensions too large'}, status=400)
+            buffer = BytesIO(); img.save(buffer, format='WEBP', quality=85); buffer.seek(0)
             filename = f'{profile.user.id}_{os.path.splitext(file_obj.name)[0]}.webp'
             profile.profile_picture_url.save(filename, ContentFile(buffer.read()), save=True)
-            
             return Response(ProfilePictureSerializer(profile).data)
-        except Exception:
-            logger.error("Upload Error", exc_info=True)
-            return Response({'error': 'Failed to process image'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception: logger.error("Upload Error", exc_info=True); return Response({'error': 'Failed'}, status=500)
 
 
 class ProfileDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, user_id, format=None):
-        target = get_object_or_404(User, pk=user_id)
-        req = request.user
-        
-        if req.id == target.id:
-            return Response(ProfileSerializer(target.profile).data)
-            
+        target = get_object_or_404(User, pk=user_id); req = request.user
+        if req.id == target.id: return Response(ProfileSerializer(target.profile).data)
         u1, u2 = sorted([req.id, target.id])
-        if Connection.objects.filter(user1_id=u1, user2_id=u2).exists():
+        if Connection.objects.filter(user1_id=u1, user2_id=u2).exists() or MatchAction.objects.filter(actor=target, target=req, action='like').exists():
             return Response(ProfileSerializer(target.profile).data)
-            
-        if MatchAction.objects.filter(actor=target, target=req, action='like').exists():
-             return Response(ProfileSerializer(target.profile).data)
-
-        return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'detail': 'Not found'}, status=404)
 
 
 """
@@ -471,23 +410,13 @@ class RecommendationView(generics.ListAPIView):
     serializer_class = ProfileSerializer
 
     def get_queryset(self):
-        user = self.request.user
-        cache_key = f"user_{user.id}_interests"
-        my_ids = cache.get(cache_key)
-        
+        user = self.request.user; cache_key = f"user_{user.id}_interests"; my_ids = cache.get(cache_key)
         if not my_ids:
             my_ids = list(user.profile.userinterest_set.values_list('interest_id', flat=True))
             cache.set(cache_key, my_ids, timeout=60)
-            
         interacted = list(MatchAction.objects.filter(actor=user).values_list('target_id', flat=True))
-        
-        queryset = Profile.objects.filter(
-            interests__id__in=my_ids
-        ).exclude(user=user).exclude(user_id__in=interacted).distinct()
-        
-        return queryset.annotate(
-            common_count=Count('interests', filter=Q(interests__id__in=my_ids))
-        ).order_by('-common_count', '?')
+        queryset = Profile.objects.filter(interests__id__in=my_ids).exclude(user=user).exclude(user_id__in=interacted).distinct()
+        return queryset.annotate(c=Count('interests', filter=Q(interests__id__in=my_ids))).order_by('-c', '?')
 
 
 class MatchActionView(APIView):
@@ -495,39 +424,20 @@ class MatchActionView(APIView):
     throttle_scope = 'messages'
 
     def post(self, request, *args, **kwargs):
-        actor = request.user
-        target_id = request.data.get('target_id')
-        action = request.data.get('action')
-        
-        if not target_id or action not in ['like', 'pass']:
-            return Response({'error': 'Invalid data'}, status=status.HTTP_400_BAD_REQUEST)
-            
+        actor = request.user; target_id = request.data.get('target_id'); action = request.data.get('action')
+        if not target_id or action not in ['like', 'pass']: return Response({'error': 'Invalid data'}, status=400)
         with transaction.atomic():
-            try:
-                target = User.objects.select_for_update().get(id=target_id)
-            except User.DoesNotExist:
-                return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
-                
-            if actor.id == target.id:
-                return Response({'error': 'Self action prohibited'}, status=status.HTTP_400_BAD_REQUEST)
-
+            try: target = User.objects.select_for_update().get(id=target_id)
+            except User.DoesNotExist: return Response({'error': 'Not found'}, status=404)
+            if actor.id == target.id: return Response({'error': 'Self action prohibited'}, status=400)
             MatchAction.objects.update_or_create(actor=actor, target=target, defaults={'action': action})
-            
-            if action == 'like':
-                if MatchAction.objects.filter(actor=target, target=actor, action='like').exists():
-                    u1, u2 = sorted([actor.id, target.id])
-                    try:
-                        conn, cr = Connection.objects.get_or_create(user1_id=u1, user2_id=u2)
-                    except IntegrityError:
-                        conn = Connection.objects.get(user1_id=u1, user2_id=u2)
-                        cr = False
-                        
-                    if cr:
-                        send_match_notification_async(actor, target)
-                        
-                    return Response({'status': 'match', 'connection_id': conn.id}, status=status.HTTP_201_CREATED)
-                    
-        return Response({'status': action}, status=status.HTTP_200_OK)
+            if action == 'like' and MatchAction.objects.filter(actor=target, target=actor, action='like').exists():
+                u1, u2 = sorted([actor.id, target.id])
+                try: conn, cr = Connection.objects.get_or_create(user1_id=u1, user2_id=u2)
+                except IntegrityError: conn = Connection.objects.get(user1_id=u1, user2_id=u2); cr = False
+                if cr: send_match_notification_async(actor, target)
+                return Response({'status': 'match', 'connection_id': conn.id}, status=201)
+        return Response({'status': action}, status=200)
 
 
 class ConnectionListView(generics.ListAPIView):
@@ -535,10 +445,9 @@ class ConnectionListView(generics.ListAPIView):
     serializer_class = ProfileSerializer
 
     def get_queryset(self):
-        user = self.request.user
-        conns = Connection.objects.filter(Q(user1=user) | Q(user2=user))
-        partner_ids = [c.user2_id if c.user1_id == user.id else c.user1_id for c in conns]
-        return Profile.objects.filter(user__id__in=partner_ids).select_related('user')
+        user = self.request.user; conns = Connection.objects.filter(Q(user1=user) | Q(user2=user))
+        p_ids = [c.user2_id if c.user1_id == user.id else c.user1_id for c in conns]
+        return Profile.objects.filter(user__id__in=p_ids).select_related('user')
 
 
 """
@@ -546,36 +455,21 @@ BLOQUE: MENSAJERÍA (CHAT)
 """
 
 class SendMessageView(generics.CreateAPIView):
-    permission_classes = [IsAuthenticated]
-    serializer_class = MessageSerializer
-    throttle_scope = 'messages'
+    permission_classes = [IsAuthenticated]; serializer_class = MessageSerializer; throttle_scope = 'messages'
 
     def perform_create(self, serializer):
-        recipient = serializer.validated_data['recipient']
-        u1, u2 = sorted([self.request.user.id, recipient.id])
-        
-        if not Connection.objects.filter(user1_id=u1, user2_id=u2).exists():
-            raise PermissionDenied("You can only message users you have matched with.")
-            
+        recipient = serializer.validated_data['recipient']; u1, u2 = sorted([self.request.user.id, recipient.id])
+        if not Connection.objects.filter(user1_id=u1, user2_id=u2).exists(): raise PermissionDenied("Not connected")
         serializer.save(sender=self.request.user)
 
 
 class ConversationView(generics.ListAPIView):
-    permission_classes = [IsAuthenticated]
-    serializer_class = MessageSerializer
+    permission_classes = [IsAuthenticated]; serializer_class = MessageSerializer
 
     def get_queryset(self):
-        user = self.request.user
-        other_id = self.kwargs['user_id']
-        u1, u2 = sorted([user.id, other_id])
-        
-        if not Connection.objects.filter(user1_id=u1, user2_id=u2).exists():
-             raise PermissionDenied("Access denied to this conversation.")
-
-        return Message.objects.filter(
-            Q(sender=user, recipient_id=other_id) | 
-            Q(sender_id=other_id, recipient=user)
-        ).order_by('timestamp')
+        user = self.request.user; other_id = self.kwargs['user_id']; u1, u2 = sorted([user.id, other_id])
+        if not Connection.objects.filter(user1_id=u1, user2_id=u2).exists(): raise PermissionDenied("Access denied")
+        return Message.objects.filter(Q(sender=user, recipient_id=other_id) | Q(sender_id=other_id, recipient=user)).order_by('timestamp')
 
 
 """
@@ -588,35 +482,20 @@ class AIChatView(APIView):
 
     def post(self, request):
         serializer = AIChatSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        user_message = serializer.validated_data['message']
-        history = serializer.validated_data['history']
-        api_key = os.environ.get('OPENAI_API_KEY')
-        
-        if not api_key:
-            return Response({'error': 'AI Service unavailable'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
+        if not serializer.is_valid(): return Response(serializer.errors, status=400)
+        user_message = serializer.validated_data['message']; history = serializer.validated_data['history']; api_key = os.environ.get('OPENAI_API_KEY')
+        if not api_key: return Response({'error': 'AI Service configuration missing'}, status=503)
         try:
             client = openai.OpenAI(api_key=api_key)
             messages_payload = [{"role": "system", "content": "Eres NexandoBot, un asistente útil para jóvenes profesionales."}]
-            
-            for msg in history[-4:]: 
-                if 'role' in msg and 'content' in msg:
-                    messages_payload.append(msg)
-            
+            for msg in history[-4:]:
+                if 'role' in msg and 'content' in msg: messages_payload.append(msg)
             messages_payload.append({"role": "user", "content": user_message})
-
-            completion = client.chat.completions.create(
-                model="gpt-3.5-turbo", 
-                messages=messages_payload, 
-                max_tokens=300
-            )
-            return Response({'reply': completion.choices[0].message.content}, status=status.HTTP_200_OK)
+            completion = client.chat.completions.create(model="gpt-3.5-turbo", messages=messages_payload, max_tokens=300)
+            return Response({'reply': completion.choices[0].message.content}, status=200)
         except Exception as e:
             logger.error(f"OpenAI API Error: {str(e)}")
-            return Response({'error': 'AI is busy, try again later.'}, status=status.HTTP_502_BAD_GATEWAY)
+            return Response({'error': 'AI service unavailable'}, status=502)
 
 
 class FeedbackView(generics.CreateAPIView):
@@ -628,6 +507,5 @@ class FeedbackView(generics.CreateAPIView):
         serializer.save(user=self.request.user)
         admin_email = os.environ.get('DEFAULT_FROM_EMAIL') 
         if admin_email:
-            subject = f"New User Feedback: {self.request.user.username}"
-            content = serializer.validated_data['content']
-            send_email_via_sendgrid(admin_email, subject, content)
+            subject = f"New Feedback: {self.request.user.username}"
+            send_email_via_sendgrid(admin_email, subject, serializer.validated_data['content'])
