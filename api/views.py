@@ -496,11 +496,14 @@ class AIChatView(APIView):
             client = openai.OpenAI(api_key=api_key)
             
             messages_payload = [
-                {"role": "system", "content": "Eres NexandoBot, un asistente útil para jóvenes profesionales en Bolivia. Sé amable y conciso."}
+                {
+                    "role": "system", 
+                    "content": "Eres NexandoBot. Tu objetivo es responder SIEMPRE de forma útil y amigable a jóvenes. Si te preguntan algo general, responde con datos o consejos breves."
+                }
             ]
             
-            for msg in history[-5:]:
-                if msg.get('content') != user_message:
+            for msg in history[-6:]:
+                if msg.get('content') and msg.get('content').strip().lower() != user_message.strip().lower():
                     messages_payload.append(msg)
             
             messages_payload.append({"role": "user", "content": user_message})
@@ -508,19 +511,19 @@ class AIChatView(APIView):
             completion = client.chat.completions.create(
                 model="gpt-5-nano",
                 messages=messages_payload,
-                max_completion_tokens=400
+                max_completion_tokens=2000
             )
 
             ai_reply = completion.choices[0].message.content
 
-            if not ai_reply:
-                ai_reply = "Interesante pregunta. ¿Podrías darme más detalles?"
+            if not ai_reply or ai_reply.strip() == "":
+                ai_reply = "¡Hola! No estoy seguro de haber captado eso. ¿Podrías preguntarme de otra forma?"
 
             return Response({'reply': ai_reply}, status=status.HTTP_200_OK)
             
         except Exception as e:
             logger.error(f"OpenAI API Error: {str(e)}")
-            return Response({'error': 'AI service is adjusting its parameters... please try again.'}, status=status.HTTP_502_BAD_GATEWAY)
+            return Response({'error': 'AI service encounter a minor hiccup... please retry.'}, status=status.HTTP_502_BAD_GATEWAY)
 
 
 class FeedbackView(generics.CreateAPIView):
