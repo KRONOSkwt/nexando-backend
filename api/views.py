@@ -494,35 +494,33 @@ class AIChatView(APIView):
 
         try:
             client = openai.OpenAI(api_key=api_key)
+            
             messages_payload = [
-                {"role": "system", "content": "Eres NexandoBot, un asistente útil para jóvenes profesionales bolivianos. Sé breve y directo."}
+                {"role": "system", "content": "Eres NexandoBot, un asistente útil para jóvenes profesionales en Bolivia. Sé amable y conciso."}
             ]
             
-            for msg in history[-4:]:
+            for msg in history[-5:]:
                 if msg.get('content') != user_message:
                     messages_payload.append(msg)
             
             messages_payload.append({"role": "user", "content": user_message})
 
-            # 2. Llamada optimizada
             completion = client.chat.completions.create(
                 model="gpt-5-nano",
                 messages=messages_payload,
-                max_completion_tokens=500,
-                temperature=0.7
+                max_completion_tokens=400
             )
 
             ai_reply = completion.choices[0].message.content
 
             if not ai_reply:
-                logger.warning(f"OpenAI devolvió respuesta vacía para el usuario {request.user.id}")
-                ai_reply = "Lo siento, tuve un pequeño lapsus. ¿Podrías repetirme eso?"
+                ai_reply = "Interesante pregunta. ¿Podrías darme más detalles?"
 
             return Response({'reply': ai_reply}, status=status.HTTP_200_OK)
             
         except Exception as e:
             logger.error(f"OpenAI API Error: {str(e)}")
-            return Response({'error': 'AI service unavailable'}, status=status.HTTP_502_BAD_GATEWAY)
+            return Response({'error': 'AI service is adjusting its parameters... please try again.'}, status=status.HTTP_502_BAD_GATEWAY)
 
 
 class FeedbackView(generics.CreateAPIView):
