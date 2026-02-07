@@ -482,20 +482,47 @@ class AIChatView(APIView):
 
     def post(self, request):
         serializer = AIChatSerializer(data=request.data)
-        if not serializer.is_valid(): return Response(serializer.errors, status=400)
-        user_message = serializer.validated_data['message']; history = serializer.validated_data['history']; api_key = os.environ.get('OPENAI_API_KEY')
-        if not api_key: return Response({'error': 'AI Service configuration missing'}, status=503)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        user_message = serializer.validated_data['message']
+        history = serializer.validated_data['history']
+        api_key = os.environ.get('OPENAI_API_KEY')
+        
+        if not api_key:
+            return Response({'error': 'AI Service configuration missing'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
         try:
             client = openai.OpenAI(api_key=api_key)
-            messages_payload = [{"role": "system", "content": "Eres NexandoBot, un asistente útil para jóvenes profesionales."}]
+            messages_payload = [
+                {"role": "system", "content": "Eres NexandoBot, un asistente útil para jóvenes profesionales bolivianos. Sé breve y directo."}
+            ]
+            
             for msg in history[-4:]:
-                if 'role' in msg and 'content' in msg: messages_payload.append(msg)
+                if msg.get('content') != user_message:
+                    messages_payload.append(msg)
+            
             messages_payload.append({"role": "user", "content": user_message})
-            completion = client.chat.completions.create(model="gpt-5-nano", messages=messages_payload, max_completion_tokens=300)
-            return Response({'reply': completion.choices[0].message.content}, status=200)
+
+            # 2. Llamada optimizada
+            completion = client.chat.completions.create(
+                model="gpt-5-nano",
+                messages=messages_payload,
+                max_completion_tokens=500,
+                temperature=0.7
+            )
+
+            ai_reply = completion.choices[0].message.content
+
+            if not ai_reply:
+                logger.warning(f"OpenAI devolvió respuesta vacía para el usuario {request.user.id}")
+                ai_reply = "Lo siento, tuve un pequeño lapsus. ¿Podrías repetirme eso?"
+
+            return Response({'reply': ai_reply}, status=status.HTTP_200_OK)
+            
         except Exception as e:
             logger.error(f"OpenAI API Error: {str(e)}")
-            return Response({'error': 'AI service unavailable'}, status=502)
+            return Response({'error': 'AI service unavailable'}, status=status.HTTP_502_BAD_GATEWAY)
 
 
 class FeedbackView(generics.CreateAPIView):
