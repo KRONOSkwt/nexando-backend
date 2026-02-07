@@ -491,7 +491,7 @@ class AIChatView(APIView):
             for msg in history[-4:]:
                 if 'role' in msg and 'content' in msg: messages_payload.append(msg)
             messages_payload.append({"role": "user", "content": user_message})
-            completion = client.chat.completions.create(model="gpt-5-nano", messages=messages_payload, max_tokens=300)
+            completion = client.chat.completions.create(model="gpt-5-nano", messages=messages_payload, max_completion_tokens=300)
             return Response({'reply': completion.choices[0].message.content}, status=200)
         except Exception as e:
             logger.error(f"OpenAI API Error: {str(e)}")
