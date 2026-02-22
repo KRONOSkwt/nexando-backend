@@ -49,7 +49,8 @@ from .serializers import (
     PasswordResetRequestSerializer,
     PasswordResetConfirmSerializer,
     AIChatSerializer,
-    FeedbackSerializer
+    FeedbackSerializer,
+    InterestSerializer
 )
 from .pagination import RecommendationPagination, ConversationPagination, ConnectionPagination
 
