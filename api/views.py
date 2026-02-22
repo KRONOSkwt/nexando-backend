@@ -9,7 +9,7 @@ from django.core.files.base import ContentFile
 from django.core.cache import cache
 from django.shortcuts import get_object_or_404
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Q, Case, When, IntegerField
 from django.contrib.auth.models import User
 from django.conf import settings
 from django.core.validators import validate_email
@@ -18,6 +18,8 @@ from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 from django.template.loader import render_to_string
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import cache_page
 
 # DRF Imports
 from rest_framework import generics, status
@@ -49,6 +51,7 @@ from .serializers import (
     AIChatSerializer,
     FeedbackSerializer
 )
+from .pagination import RecommendationPagination, ConversationPagination, ConnectionPagination
 
 logger = logging.getLogger(__name__)
 
@@ -356,15 +359,30 @@ class UserProfileView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, format=None):
-        profile, _ = Profile.objects.get_or_create(user=request.user, defaults={'first_name': request.user.first_name or 'User'})
+        # N1-01c: 2-step get_or_create then re-fetch with prefetch to avoid N+1 on interests
+        Profile.objects.get_or_create(user=request.user, defaults={'first_name': request.user.first_name or 'User'})
+        profile = (
+            Profile.objects
+            .select_related('user')
+            .prefetch_related('userinterest_set__interest')
+            .get(user=request.user)
+        )
         return Response(ProfileSerializer(profile).data)
-    
+
     def patch(self, request, format=None):
         profile, _ = Profile.objects.get_or_create(user=request.user)
         serializer = ProfileSerializer(profile, data=request.data, partial=True)
         if serializer.is_valid():
-            serializer.save(); cache.delete(f"user_{request.user.id}_interests") 
-            return Response(serializer.data)
+            serializer.save()
+            cache.delete(f"user_{request.user.id}_interests")
+            # N1-04: Re-fetch with prefetch to avoid N+1 in the serialized response
+            refreshed = (
+                Profile.objects
+                .select_related('user')
+                .prefetch_related('userinterest_set__interest')
+                .get(user=request.user)
+            )
+            return Response(ProfileSerializer(refreshed).data)
         return Response(serializer.errors, status=400)
 
 
@@ -392,12 +410,25 @@ class ProfilePictureUploadView(APIView):
 class ProfileDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @method_decorator(cache_page(60 * 5))  # CAC-02: Cache profile for 5 minutes
     def get(self, request, user_id, format=None):
-        target = get_object_or_404(User, pk=user_id); req = request.user
-        if req.id == target.id: return Response(ProfileSerializer(target.profile).data)
+        target = get_object_or_404(User, pk=user_id)
+        req = request.user
         u1, u2 = sorted([req.id, target.id])
-        if Connection.objects.filter(user1_id=u1, user2_id=u2).exists() or MatchAction.objects.filter(actor=target, target=req, action='like').exists():
-            return Response(ProfileSerializer(target.profile).data)
+        # Helper: fetch target profile with all prefetches to avoid N+1 on interests
+        def _fetch_target_profile():
+            return (
+                Profile.objects
+                .select_related('user')
+                .prefetch_related('userinterest_set__interest')
+                .get(user=target)
+            )
+        if req.id == target.id:
+            return Response(ProfileSerializer(_fetch_target_profile()).data)
+        # N1-01b: use prefetch_related on the profile fetch
+        if (Connection.objects.filter(user1_id=u1, user2_id=u2).exists() or
+                MatchAction.objects.filter(actor=target, target=req, action='like').exists()):
+            return Response(ProfileSerializer(_fetch_target_profile()).data)
         return Response({'detail': 'Not found'}, status=404)
 
 
@@ -408,14 +439,26 @@ BLOQUE: MATCHING Y CONEXIONES
 class RecommendationView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = ProfileSerializer
+    pagination_class = RecommendationPagination
 
     def get_queryset(self):
-        user = self.request.user; cache_key = f"user_{user.id}_interests"; my_ids = cache.get(cache_key)
+        user = self.request.user
+        cache_key = f"user_{user.id}_interests"
+        my_ids = cache.get(cache_key)
         if not my_ids:
             my_ids = list(user.profile.userinterest_set.values_list('interest_id', flat=True))
             cache.set(cache_key, my_ids, timeout=60)
         interacted = list(MatchAction.objects.filter(actor=user).values_list('target_id', flat=True))
-        queryset = Profile.objects.filter(interests__id__in=my_ids).exclude(user=user).exclude(user_id__in=interacted).distinct()
+        # N1-01a: select_related + prefetch_related to eliminate N+1 on interests per profile
+        queryset = (
+            Profile.objects
+            .filter(interests__id__in=my_ids)
+            .exclude(user=user)
+            .exclude(user_id__in=interacted)
+            .distinct()
+            .select_related('user')
+            .prefetch_related('userinterest_set__interest')
+        )
         return queryset.annotate(c=Count('interests', filter=Q(interests__id__in=my_ids))).order_by('-c', '?')
 
 
@@ -443,11 +486,30 @@ class MatchActionView(APIView):
 class ConnectionListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = ProfileSerializer
+    pagination_class = ConnectionPagination
 
     def get_queryset(self):
-        user = self.request.user; conns = Connection.objects.filter(Q(user1=user) | Q(user2=user))
-        p_ids = [c.user2_id if c.user1_id == user.id else c.user1_id for c in conns]
-        return Profile.objects.filter(user__id__in=p_ids).select_related('user')
+        user = self.request.user
+        # N1-02: Replaced Python loop with a single DB-level Case/When annotation.
+        # No Connection objects are materialised into Python memory.
+        partner_ids = (
+            Connection.objects
+            .filter(Q(user1=user) | Q(user2=user))
+            .annotate(
+                partner_id=Case(
+                    When(user1=user, then='user2_id'),
+                    default='user1_id',
+                    output_field=IntegerField(),
+                )
+            )
+            .values_list('partner_id', flat=True)
+        )
+        return (
+            Profile.objects
+            .filter(user_id__in=partner_ids)
+            .select_related('user')
+            .prefetch_related('userinterest_set__interest')
+        )
 
 
 """
@@ -464,12 +526,36 @@ class SendMessageView(generics.CreateAPIView):
 
 
 class ConversationView(generics.ListAPIView):
-    permission_classes = [IsAuthenticated]; serializer_class = MessageSerializer
+    permission_classes = [IsAuthenticated]
+    serializer_class = MessageSerializer
+    pagination_class = ConversationPagination
 
     def get_queryset(self):
-        user = self.request.user; other_id = self.kwargs['user_id']; u1, u2 = sorted([user.id, other_id])
-        if not Connection.objects.filter(user1_id=u1, user2_id=u2).exists(): raise PermissionDenied("Access denied")
-        return Message.objects.filter(Q(sender=user, recipient_id=other_id) | Q(sender_id=other_id, recipient=user)).order_by('timestamp')
+        user = self.request.user
+        other_id = self.kwargs['user_id']
+        u1, u2 = sorted([user.id, other_id])
+        if not Connection.objects.filter(user1_id=u1, user2_id=u2).exists():
+            raise PermissionDenied("Access denied")
+        # N1-03: select_related eliminates N+1 from MessageSerializer accessing sender.id
+        # Phase 2: Ordered by -timestamp so page 1 brings most recent messages
+        return (
+            Message.objects
+            .filter(Q(sender=user, recipient_id=other_id) | Q(sender_id=other_id, recipient=user))
+            .select_related('sender', 'recipient')
+            .order_by('-timestamp')
+        )
+
+class InterestListView(generics.ListAPIView):
+    """
+    CAC-01: Master interest list. Cached for 1 hour.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = InterestSerializer
+    queryset = Interest.objects.all().order_by('name')
+
+    @method_decorator(cache_page(60 * 60))
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
 
 
 """

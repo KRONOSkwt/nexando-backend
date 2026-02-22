@@ -26,7 +26,10 @@ from .views import (
     
     # Vistas de Funcionalidades v1.1
     AIChatView,
-    FeedbackView
+    FeedbackView,
+    
+    # Nuevo: Maestro de intereses
+    InterestListView
 )
 
 urlpatterns = [
@@ -107,4 +110,7 @@ urlpatterns = [
     
     # Envío de Feedback / Reportes de Bug
     path('feedback/', FeedbackView.as_view(), name='feedback'),
+
+    # Maestro de Intereses (Cacheado)
+    path('interests/', InterestListView.as_view(), name='interest-list'),
 ]
