@@ -8,6 +8,13 @@ class UserInterestInline(admin.TabularInline):
     extra = 1
     autocomplete_fields = ['interest']
 
+# N+1 Fix: list_select_related avoids per-row FK queries in the Admin list view
+# (UserInterest.__str__ accesses profile.user.username and interest.name)
+class UserInterestAdmin(admin.ModelAdmin):
+    list_display = ('profile', 'interest', 'is_primary')
+    list_filter = ('is_primary',)
+    list_select_related = ('profile__user', 'interest')
+
 class ProfileAdmin(admin.ModelAdmin):
     list_display = ('user', 'first_name', 'city')
     search_fields = ('user__username', 'first_name', 'city')
@@ -31,6 +38,7 @@ class FeedbackAdmin(admin.ModelAdmin):
 # Registro de modelos
 admin.site.register(Profile, ProfileAdmin)
 admin.site.register(Interest, InterestAdmin)
+admin.site.register(UserInterest, UserInterestAdmin)
 admin.site.register(MatchAction)
 admin.site.register(Connection)
 admin.site.register(Message)

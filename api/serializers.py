@@ -12,6 +12,11 @@ class InterestInputSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=100, source='interest.name')
     is_primary = serializers.BooleanField(default=False)
 
+class InterestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Interest
+        fields = ['id', 'name']
+
 """
 SERIALIZADORES DE PERFIL
 """
